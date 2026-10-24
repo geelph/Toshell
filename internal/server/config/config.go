@@ -756,6 +756,22 @@ func writeYAMLAtomic(path string, doc *yaml.Node) error {
 	return nil
 }
 
+// watchDisabledForTests 由单元测试在 TestMain 里置位（见 DisableWatchForTests）。
+// 只在进程启动早期写入一次，之后只读，故用普通 bool 即可。
+var watchDisabledForTests bool
+
+// DisableWatchForTests 关闭配置热更新监听（viper.WatchConfig）。**仅供单元测试调用**。
+//
+// 为什么需要：viper 的 WatchConfig 是**进程级**状态，而本包的用例各自 Load 一个临时
+// 配置文件；上一个用例留下的 watcher 会在下一个用例写入/删除临时文件时触发
+// Reload，把后者的断言打乱。CI 上表现为偶发失败：
+//
+//	--- FAIL: TestReloadRejectsBrokenYAMLAndKeepsOldConfig
+//	    config_reload_test.go:74: 重载失败后配置被改动了：listener.port=8080，期望仍是 18777
+//
+// 生产路径完全不受影响（只有测试会调用这个函数）。
+func DisableWatchForTests() { watchDisabledForTests = true }
+
 func Load(configPath string) (*Config, error) {
 	viper.SetConfigType("yaml")
 
@@ -918,12 +934,17 @@ func Load(configPath string) (*Config, error) {
 	// 走 Reload()（v1.4.0 S6 附带修复）：它先 ReadInConfig 再 Apply，
 	// 读取/解析失败时打 error 日志 + 记录 LastReload().OK=false，
 	// **不会**再出现"文件写坏了却宣称已热重载"的假成功。
-	viper.WatchConfig()
-	viper.OnConfigChange(func(_ fsnotify.Event) {
-		// 失败原因已经由 Reload 内部打日志并记录状态，这里不需要再处理
-		// （配置可能处于半写入状态，下次变化会再试一遍）。
-		_ = Reload()
-	})
+	//
+	// 单元测试下跳过（watchDisabledForTests）：viper 的 watcher 是进程级状态，
+	// 用例之间会互相触发 Reload 导致偶发失败，见 DisableWatchForTests 的注释。
+	if !watchDisabledForTests {
+		viper.WatchConfig()
+		viper.OnConfigChange(func(_ fsnotify.Event) {
+			// 失败原因已经由 Reload 内部打日志并记录状态，这里不需要再处理
+			// （配置可能处于半写入状态，下次变化会再试一遍）。
+			_ = Reload()
+		})
+	}
 
 	return &config, nil
 }
