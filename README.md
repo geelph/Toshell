@@ -149,10 +149,12 @@ ToShell 是一个轻量 C2 框架，由 **服务端（Team Server）+ Web 控制
 
 ## 功能部分截图
 
-> 下面 12 张图全部来自**本机沙箱实测**（用 v1.4.0 工作区的服务端源码带 `-tags webui` 现构建，接了
-> 两个**真实回连的会话**：一个 `light`、一个 `full`），不是设计稿或占位图；沙箱用的是临时生成的口令与自签 JWT，
-> **截图里不出现任何真实密码 / API Key**。
-
+> 下面 17 张图是**亮色主题下的真机实拍**：直接用 `v1.4.1` 服务端起站，接了两个**真实回连的会话**
+> （Windows/amd64 与 Linux/amd64 各一台），**分辨率按截图机器的原生显示 2560×1440**，
+> 不是设计稿、不是占位图，也没有做任何"摆拍"式修饰。
+>
+> 说明：截图里出现的主机名 / 内网 IP / 进程列表都是**测试环境的真实数据**（这也是它可信的原因）；
+> 演示用的是本地测试账号，**不包含任何真实口令、API Key 或生产资产信息**。
 **登录页**：控制台入口，可与 Basic 认证前置门槛、隐蔽入口（`/__gate`）配合防资产测绘收录。
 
 <img src="docs/screenshots/login.png" width="100%" alt="登录页">
@@ -169,7 +171,7 @@ ToShell 是一个轻量 C2 框架，由 **服务端（Team Server）+ Web 控制
 
 <img src="docs/screenshots/session-detail.png" width="100%" alt="会话详情">
 
-**会话详情（`light` 载荷）**：同一台机器上的 `light` 会话只有 6 个标签 —— 未编译进载荷的能力**不会**显示成空面板。
+**会话详情（`light` 档载荷 —— 这里的 light 指载荷档位，与亮色主题无关）**：同一台机器上的 `light` 会话只有 6 个标签 —— 未编译进载荷的能力**不会**显示成空面板。
 
 <img src="docs/screenshots/session-detail-light.png" width="100%" alt="会话详情（light 载荷）">
 
@@ -193,13 +195,34 @@ ToShell 是一个轻量 C2 框架，由 **服务端（Team Server）+ Web 控制
 
 <img src="docs/screenshots/avops.png" width="100%" alt="对抗分级">
 
-**AI 副驾驶**：真实模型对话（沙箱里两个真实会话，含 `session_list` / `session_context` 工具调用轨迹与下一步建议）。
+**AI 副驾驶**：真实模型对话（接入两个真实回连会话，含 `session_list` / `session_context` 工具调用轨迹与下一步建议）。
 
 <img src="docs/screenshots/copilot.png" width="100%" alt="AI 副驾驶">
 
 **生成载荷 · PE 版本资源**：图标 / 版本信息 / 时间戳（可选，默认不注入），与代码签名、UPX 的先后顺序在页面上写明。
 
 <img src="docs/screenshots/builder.png" width="100%" alt="生成载荷 · PE 版本资源">
+**进程列表**：真实目标机的进程清单（本机实测 350+ 条），可按名称过滤、直接结束进程或对指定 PID 发起注入。
+
+<img src="docs/screenshots/process.png" width="100%" alt="进程列表">
+
+**隧道 / 代理**：SOCKS5 动态代理，支持可选认证（RFC 1929）；代理**落库持久化**，服务端重启后自动重建监听。
+
+<img src="docs/screenshots/tunnels.png" width="100%" alt="隧道 / 代理">
+
+**通道状态**：四类通道的在线情况，以及 v1.4.1 新增的 `screen_stream` 投递计数（收帧 / 投递 / 丢弃 / 订阅者数）。
+
+<img src="docs/screenshots/channels.png" width="100%" alt="通道状态">
+
+**设置**：分 4 个分页；每个配置分组**默认折叠**（v1.4.1 起），点标题再展开，一页不再铺开十几个控件。
+
+<img src="docs/screenshots/settings.png" width="100%" alt="设置">
+
+**关于**：版本、许可与文档入口（`v1.4.1`），以及对本项目有过帮助的早期开源 C2 项目（VShell）的致谢。
+
+<img src="docs/screenshots/about.png" width="100%" alt="关于">
+
+**关于**：版本、许可与文档入口（`v1.4.1`，含对早期开源 C2 项目 VShell 的致谢）。
 
 ## 使用前准备
 
