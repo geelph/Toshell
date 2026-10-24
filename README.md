@@ -393,6 +393,12 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/e2e_smoke.ps1
 > *Bug reports and feature requests: please open an issue with version, environment and reproduction steps.*
 > *Security disclosures / business & authorization enquiries: email [qingshan@88.com](mailto:qingshan@88.com).*
 
+## 致谢 / Acknowledgements
+
+- **[VShell](https://github.com/veo/vshell)** —— 早期开放源码的老牌 C2 项目（后续已闭源）。它的公开设计与工程取舍帮我们把"这个领域到底该有哪些东西、我们自己缺什么 / 多做了什么"想清楚了：v1.4.1 的**隧道持久化、批量操作、屏幕流投递计数**三个改进点，就是拿它的设计做对照后补上的（对比可见 [docs/VSHELL-ANALYSIS.md](docs/VSHELL-ANALYSIS.md)）。
+  **边界（重要）**：我们**只吸收设计思想**，没有复制它的任何代码、前端资源、协议常量或协议格式；分析文档里的 `文件:行` 引用仅用于让结论可核查，**不构成任何代码许可**。ToShell 的前端、协议、构建流水线均为自研。
+- 以及所有提 Issue / 反馈现场问题的师傅们 —— 本版修的**乱码、Linux 用户名显示、文件预览后缀限制、代理认证、Linux/amd64 秒断**，都是照着你们的现场反馈定位的。
+
 ## 开源与授权
 
 - 使用说明：[USAGE.md](USAGE.md)

@@ -187,6 +187,10 @@ jobs:
 
             使用说明：[使用说明](https://github.com/${{ github.repository }}/blob/main/USAGE.md)
 
+            致谢：[VShell](https://github.com/veo/vshell) —— 早期开放源码的老牌 C2 项目（后续已闭源），
+            它的公开设计思路帮我们把"该有哪些东西"想清楚了；本项目**未复制其任何代码/资源/协议常量**，
+            取舍与许可证边界见 [参考实现分析](https://github.com/${{ github.repository }}/blob/main/docs/VSHELL-ANALYSIS.md)。
+
             Bug或者建议请提交issue。
 
   # 全部 zip 汇总后生成校验清单（sha256），随 Release 一起发布。
