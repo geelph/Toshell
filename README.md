@@ -17,6 +17,8 @@ ToShell 是一个轻量 C2 框架，由 **服务端（Team Server）+ Web 控制
 |---|---|
 | [USAGE.md](USAGE.md) | **主手册**：安装部署、配置项逐条说明、生成载荷、会话操作、签名与加载器链、常见问题排查 |
 | [docs/EVASION.md](docs/EVASION.md) | **免杀到底做了什么**：三类能力（落地 / 动态免杀 / 静态降特征）的实现位置、验证状态与自查方法 |
+| [docs/RUST-IMPLANT.md](docs/RUST-IMPLANT.md) | **Rust 植入端值不值得做**：实测体积（`light` 等价物 350,720 B vs Go 2,946,805 B）、移植成本分解与分阶段计划；探针源码在 [docs/rust-probe/](docs/rust-probe/) |
+| [docs/VSHELL-ANALYSIS.md](docs/VSHELL-ANALYSIS.md) | **同类项目的设计取舍**：对一份第三方 C2 复刻的架构对比、可借鉴点与**许可证红线**（只吸收设计、不搬代码） |
 | [docs/LOADERS.md](docs/LOADERS.md) | **不落地未签名 PE 怎么上线**：白加黑、计划任务、rundll32/mshta/certutil、内存加载链的前置条件与取舍 |
 | [docs/DEPLOY-DOMAIN-CDN.md](docs/DEPLOY-DOMAIN-CDN.md) | 用**域名 + CDN / Nginx 反代 / 域前置**上线时的配置与排错 |
 | [CHANGELOG.md](CHANGELOG.md) | 每个版本改了什么 |
@@ -98,6 +100,23 @@ ToShell 是一个轻量 C2 框架，由 **服务端（Team Server）+ Web 控制
 
 **加密通信**
 - 控制帧 AES-256-GCM 认证加密 + 隧道数据 SM4-GCM（国密自研），密钥域分离；配置热更新。
+
+## v1.4.1 重点变化（补丁版）
+
+补丁版**只修缺陷、只补操作员直接提的可用性问题，不引入新攻击能力**。逐条实测记录见 [CHANGELOG.md](CHANGELOG.md) 的 v1.4.1 段。
+
+| 变化 | 对外入口 | 说明 / 边界 |
+|---|---|---|
+| **Linux 会话用户名不再 `unknown`** | 会话列表 / 详情 | 环境变量取不到时读 `/etc/passwd`（纯 Go，CGO 关闭也可用），再退 `uid:N` |
+| **杀软击杀 / 启动项回显乱码已修** | 任务结果 / 详情页 | 中文 Windows 工具按 **CP936(GBK)** 输出；现在**只在展示层**逐行归一，**原始结果字节不动**（可回读、可下载） |
+| **创建代理可选认证** | 隧道/代理创建页 | SOCKS5 **RFC 1929** 用户名/口令 + HTTP `Proxy-Authorization`；**留空 = 无认证**，响应与日志**不回显口令** |
+| **文件预览按后缀限制** | 文件管理 → 预览 | 白名单外/未识别后缀**弹窗提示**（可"仍要预览前 N KB"或下载）；**服务端二次校验**，二进制伪造图片直接拒；超大文本只给前 64 KB 且标 `truncated` |
+| **Linux/amd64 载荷"秒断"** | 构建载荷 | 修掉 `light` 档在非 Windows 上编译不过；**构建时拦截"协议与监听器通道不一致"**（这类载荷必然连上即断），并统一编译 tag 与配置块 `transport` 的来源 |
+| **Rust 植入端可行性（结论：可行）** | [docs/RUST-IMPLANT.md](docs/RUST-IMPLANT.md) | 本机实测 `light` 等价物 **350,720 B**（Go 同形态 2,946,805 B，**小 8.4 倍**）；`light+http` 走 Windows SChannel 的 TLS 增量只有 **17,408 B**。**v1.6 立项，不在本版写代码** |
+| **参考实现分析** | [docs/VSHELL-ANALYSIS.md](docs/VSHELL-ANALYSIS.md) | 对第三方 C2 复刻做架构对比与取舍建议；**许可证不允许搬代码**，只吸收设计 |
+
+> ⚠️ **本版不做的事**：不加新通道、不动协议帧格式、不改默认值（认证留空即无认证、预览限制只影响"内联预览"不影响下载）。
+> Rust 植入端在 v1.4.1 只有**可行性结论与体积探针**（[docs/rust-probe/](docs/rust-probe/)），**没有产品代码**。
 
 ## v1.4.0 重点变化与如实边界
 

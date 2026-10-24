@@ -136,11 +136,8 @@ func (s *Server) implantResultHandler(w http.ResponseWriter, r *http.Request) {
 			if result.ExitCode == 0 && result.Error == "" {
 				s.taskMgr.Complete(result.TaskID, result.ExitCode, result.Output, result.Error)
 
-				// Truncate output for summary
-				outputSummary := result.Output
-				if len(outputSummary) > 200 {
-					outputSummary = outputSummary[:200] + "..."
-				}
+				// 摘要：按 rune 边界截断 + 展示层编码归一（旧 output[:200] 会切坏中文）
+				outputSummary := summarizeOutput(result.Output, 200)
 
 				// Broadcast task_completed event
 				if s.wsHub != nil {
@@ -164,7 +161,9 @@ func (s *Server) implantResultHandler(w http.ResponseWriter, r *http.Request) {
 					})
 				}
 			} else {
-				s.taskMgr.Fail(result.TaskID, result.Error)
+				// 失败也要留下输出：旧代码只回一句 error，把 result.Output 丢掉，
+				// 结果是"失败任务只剩 exit code"，排障时看不到工具自己打印的原因。
+				s.taskMgr.FailWithResult(result.TaskID, result.ExitCode, result.Output, result.Error)
 
 				// Broadcast task_failed event
 				if s.wsHub != nil {
@@ -183,7 +182,8 @@ func (s *Server) implantResultHandler(w http.ResponseWriter, r *http.Request) {
 							"task_type":  taskType,
 							"session_id": sessionID,
 							"exit_code":  result.ExitCode,
-							"error":      result.Error,
+							"output":     summarizeOutput(result.Output, 200),
+							"error":      displayOutput(result.Error),
 						},
 					})
 				}

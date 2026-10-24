@@ -1,0 +1,35 @@
+[package]
+name = "probe"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = []
+schannel = ["dep:native-tls"]
+rustls = ["dep:rustls", "dep:webpki-roots"]
+
+[dependencies]
+native-tls = { version = "0.2", optional = true, default-features = false }
+rustls = { version = "0.23", optional = true, default-features = false, features = ["ring", "std", "tls12", "logging"] }
+webpki-roots = { version = "0.26", optional = true }
+
+[[bin]]
+name = "tls_schannel"
+path = "src/tls_schannel.rs"
+required-features = ["schannel"]
+
+[[bin]]
+name = "tcp_base"
+path = "src/tcp_base.rs"
+
+[[bin]]
+name = "tls_rustls"
+path = "src/tls_rustls.rs"
+required-features = ["rustls"]
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = "symbols"

@@ -1795,6 +1795,92 @@
   padding: 0;
 }
 
+/* 图片预览：服务端已按内容签名给出 MIME，前端只用 data: URL 展示 */
+.preview-image {
+  flex: 1;
+  min-height: 0;
+  object-fit: contain;
+  max-width: 100%;
+  margin: auto;
+  padding: 16px;
+  background: var(--color-bg);
+}
+
+/* 预览限制弹窗（未识别后缀/黑名单/超大/二进制）：比预览框小，按钮区明确 */
+.modal-notice {
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.35);
+  width: 92vw;
+  max-width: 560px;
+  display: flex;
+  flex-direction: column;
+  animation: modalSlideUp 0.2s ease-out;
+  overflow: hidden;
+}
+
+.modal-notice .modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  background: var(--color-bg-tertiary);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.modal-notice .modal-header h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-warning);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-notice-body {
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.preview-notice-file {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--color-text);
+  word-break: break-all;
+}
+
+.preview-notice-message {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--color-text-secondary);
+}
+
+.preview-notice-code {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.preview-notice-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--color-border);
+}
+
 /* ═══════════════════════════════════════════════════
    文件列表操作按钮
    ═══════════════════════════════════════════════════ */

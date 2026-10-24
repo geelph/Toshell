@@ -12,7 +12,6 @@ import (
 	"sync"
 	"syscall"
 	"time"
-	"unicode/utf8"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -999,14 +998,13 @@ func utf16SliceToUTF8(ws []uint16) []byte {
 
 // guardDecodeConsole 把控制台工具的输出解成 UTF-8：
 // 已经是合法 UTF-8 就原样返回；否则按 GBK 转（中文工具在中文 Windows 上默认输出 GBK）。
+// 与 executeTask 末尾同一口径（decodeConsoleText，逐行判定）：载荷 stdout/stderr 里也可能
+// 混着 UTF-8 文本，逐行转比整串转更不容易把已正确的部分打坏。
 func guardDecodeConsole(raw []byte) string {
 	if len(raw) == 0 {
 		return ""
 	}
-	if utf8.Valid(raw) {
-		return string(raw)
-	}
-	return string(gbkToUTF8(raw))
+	return decodeConsoleText(string(raw))
 }
 
 // ─── 结果回显 ───────────────────────────────────────────────────────────────

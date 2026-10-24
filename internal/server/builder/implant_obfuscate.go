@@ -181,6 +181,14 @@ func obfuscateImplantSource(src []byte, xdBase byte) []byte {
 					i++
 					continue
 				}
+				// const 声明里的双引号字面量**必须原样保留**：const 要求编译期常量，
+				// 而 xd("...") 是函数调用 → 改写后编译直接失败（详见 inConstDecl 的注释）。
+				if inConstDecl(src, i) {
+					out.Write(src[i : j+1])
+					i = j + 1
+					lineStart = false
+					continue
+				}
 				str := string(src[i+1 : j])
 				// 跳过已加密的 xd("...") 参数
 				insideXd := i >= 3 && src[i-3] == 'x' && src[i-2] == 'd' && src[i-1] == '('
@@ -262,8 +270,9 @@ func rawStringObfuscatable(content string, src []byte, at int) bool {
 		return false
 	}
 	// 同一行里出现 const：常量声明要求编译期常量，xd() 是函数调用 → 会把源码改坏。
-	// （双引号路径今天没有这个问题，因为模板里没有 ≥4 字符的 const 字符串；这里显式挡一层。）
-	if lineHasConst(src, at) {
+	// （双引号路径已在 obfuscateImplantSource 里用 inConstDecl 挡过；这里再挡一层，
+	// 反引号路径的判定口径与它保持一致。）
+	if lineHasConst(src, at) || inConstDecl(src, at) {
 		return false
 	}
 	return true
@@ -321,6 +330,85 @@ func lineHasConst(src []byte, at int) bool {
 		lineStart--
 	}
 	return strings.Contains(string(src[lineStart:at]), "const")
+}
+
+// inConstDecl 判断 at 处的字符串字面量是否落在 Go 的 **const 声明**里。
+//
+// 为什么必须跳过（这是一个**真的会炸构建**的坑，不是洁癖）：
+// const 声明要求值是编译期常量，而混淆后的形式 xd("...") 是函数调用。
+// 把 const 里的字面量改写成 xd(...) 后，`go build` 直接报
+//
+//	.\username.go:34:20: xd("7518d4a0c9794d3c01e2dc") (value of type string) is not constant
+//
+// **整份载荷构建失败**（与目标平台无关：linux/windows、exe/bin 全炸）。也就是说
+// 模板里只要有人新增一条 `const x = "≥4 字符的字符串"`，平台就再也构建不出载荷；
+// 而报错信息只指到模板行号，看上去像"模板写错了"，实际是构建期混淆越界。
+//
+// 判定覆盖三种写法（准则都是"宁可少混淆一个字符串，也绝不能改坏源码"）：
+//  1. 单行 const：`const x = "..."`（本行 trim 后以 const 关键字开头）
+//  2. 函数内/缩进的 const：`\tconst x = "..."`（同上）
+//  3. 分组 const(...) 块里的成员行：向上找最近的**顶格行**（Go 的顶层声明一定从
+//     第 0 列开始），若它以 const 开头且带 `(`，说明当前仍在 const 组里。
+//     分组结束后的下一条顶层声明会是新的顶格行（var/type/func），因此不会误判。
+func inConstDecl(src []byte, at int) bool {
+	if at < 0 || at > len(src) {
+		return false
+	}
+	// (1)(2) 本行 trim 后以 const 关键字开头
+	lineStart := at
+	for lineStart > 0 && src[lineStart-1] != '\n' {
+		lineStart--
+	}
+	i := lineStart
+	for i < at && (src[i] == ' ' || src[i] == '\t') {
+		i++
+	}
+	if hasKeywordAt(src, i, "const") {
+		return true
+	}
+	// (3) 向上找最近的顶格行
+	pos := lineStart
+	for pos > 0 {
+		prevEnd := pos - 1 // '\n' 的位置
+		if prevEnd > 0 && src[prevEnd-1] == '\r' {
+			prevEnd--
+		}
+		prevStart := prevEnd
+		for prevStart > 0 && src[prevStart-1] != '\n' {
+			prevStart--
+		}
+		pos = prevStart
+		if prevStart < len(src) && (src[prevStart] == ' ' || src[prevStart] == '\t') {
+			continue // 缩进行：属于函数体/分组内部，不是顶层声明
+		}
+		line := strings.TrimSpace(string(src[prevStart:prevEnd]))
+		if line == "" {
+			continue
+		}
+		if !hasKeywordAt([]byte(line), 0, "const") {
+			return false
+		}
+		// const 单行声明（不带括号）不覆盖下面的行
+		return strings.Contains(line, "(")
+	}
+	return false
+}
+
+// hasKeywordAt 判断 b[off:] 是否以 Go 关键字 kw 开头（后面必须是非标识符字符）。
+func hasKeywordAt(b []byte, off int, kw string) bool {
+	if off < 0 || off+len(kw) > len(b) {
+		return false
+	}
+	if string(b[off:off+len(kw)]) != kw {
+		return false
+	}
+	next := off + len(kw)
+	return next >= len(b) || !isIdentByte(b[next])
+}
+
+// isIdentByte 判断是否是 Go 标识符可用字符（字母/数字/下划线）。
+func isIdentByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_'
 }
 
 // obfuscateImplantSources 对 tmpDir 下所有模板 .go 文件执行字符串混淆。

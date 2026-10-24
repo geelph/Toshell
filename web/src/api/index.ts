@@ -1,5 +1,6 @@
 import axios from 'axios'
 import type { Session, Task, TaskStats, LogEntry, TaskRequest, ListenerInfo, PeResourceRequest } from '../types'
+import type { PreviewPolicy } from '../utils/previewPolicy'
 
 export interface Tunnel {
   id: number
@@ -60,6 +61,14 @@ export const sessionApi = {
     api.get(`/sessions/${id}/files`, { params: { path } }),
   downloadFile: (id: string, path: string) => 
     api.post(`/sessions/${id}/files/download`, { path }),
+  /**
+   * 服务端二次校验的文件预览：黑名单后缀返回 415，未识别后缀未确认返回 409
+   * （code=preview_unknown_ext，前端弹窗让操作员选择），成功返回 base64 内容。
+   */
+  previewFile: (id: string, path: string, size: number, force = false) =>
+    api.post<PreviewFileResponse>(`/sessions/${id}/files/preview`, { path, size, force }, { timeout: 60000 }),
+  /** 预览规则清单（文本/图片白名单、黑名单、大小上限），服务端为准 */
+  previewPolicy: () => api.get<PreviewPolicy>('/files/preview-policy'),
   deleteFile: (id: string, path: string) => 
     api.post(`/sessions/${id}/files/delete`, { path }),
   uploadFile: (id: string, payload: {
@@ -155,9 +164,42 @@ export const sessionApi = {
 
 export const tunnelApi = {
   list: () => api.get<{ servers: SOCKS5ServerInfo[]; count: number }>('/tunnels'),
-  create: (session_id: string, local_port: number) => 
-    api.post('/tunnels', { session_id, local_port }),
+  /** auth_user/auth_pass 可选：留空 = 无认证（历史行为）。口令不会回显。 */
+  create: (session_id: string, local_port: number, auth_user?: string, auth_pass?: string) =>
+    api.post('/tunnels', {
+      session_id,
+      local_port,
+      ...(auth_user ? { auth_user } : {}),
+      ...(auth_pass ? { auth_pass } : {}),
+    }),
   delete: (sessionId: string) => api.delete(`/tunnels/${sessionId}`),
+}
+
+/** 文件预览响应（服务端 POST /sessions/{id}/files/preview） */
+export interface PreviewFileResponse {
+  success: boolean
+  path: string
+  category: 'text' | 'image' | 'executable' | 'archive' | 'database' | 'unknown'
+  ext: string
+  size: number
+  preview_bytes: number
+  truncated: boolean
+  mime?: string
+  content_b64: string
+  message?: string
+}
+
+/** 文件预览错误信封（415/409/413/504 等） */
+export interface PreviewFileError {
+  success?: false
+  code?: string
+  error?: string
+  message?: string
+  category?: string
+  ext?: string
+  download_only?: boolean
+  requires_confirmation?: boolean
+  preview_bytes?: number
 }
 
 export interface RelayNode {
@@ -479,6 +521,8 @@ export interface SOCKS5ServerInfo {
   session_id: string
   local_port: number
   tunnels: Tunnel[]
+  /** 是否启用了代理认证（口令绝不下发；老服务端可能没有该字段） */
+  auth_enabled?: boolean
 }
 
 export interface Plugin {

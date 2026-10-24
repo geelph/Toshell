@@ -103,3 +103,10 @@ release/USAGE.md
 docs/PLAN-NEXT-ROUND.md
 docs/plan/
 agent优化方案.md
+
+# 第三方参考实现源码（仅本地阅读做设计对比，见 docs/VSHELL-ANALYSIS.md；不随本仓库分发）
+vshell/
+
+# Rust 体积探针的构建产物（源码入库，产物不入库）
+docs/rust-probe/out/
+docs/rust-probe/cargo-tls/target/

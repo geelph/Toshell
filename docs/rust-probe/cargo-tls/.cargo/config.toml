@@ -1,0 +1,7 @@
+# TLS 探针的 cargo 配置：用 PATH 里的 MinGW-w64 gcc 链接（build.ps1 会把 mingw64\bin 放到最前）
+[target.x86_64-pc-windows-gnu]
+linker = "gcc"
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[build]
+target = "x86_64-pc-windows-gnu"

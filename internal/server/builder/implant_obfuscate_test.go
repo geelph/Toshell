@@ -144,6 +144,71 @@ func TestNoDoubleObfuscation(t *testing.T) {
 	}
 }
 
+// ─── 双引号字面量的 const 保护（真会炸构建的回归用例）────────────────────
+//
+// 实测事故：模板里新增 `const passwdPath = "/etc/passwd"` 后，本混淆器把它改写成
+// xd("...")，`go build` 报
+//
+//	.\username.go:34:20: xd("...") (value of type string) is not constant
+//
+// → **所有载荷构建全部失败**（linux/windows、exe/bin 都不例外）。下面把三种 const
+// 写法都钉住，同时确保非 const 的字面量照旧被混淆（不能为了修 bug 把混淆关掉）。
+
+// TestKeepQuotedLiteralInConst 单行 / 函数内 / 分组 const 里的双引号字面量必须原样保留。
+func TestKeepQuotedLiteralInConst(t *testing.T) {
+	cases := []struct{ name, src string }{
+		{"单行 const", "package main\n\nconst passwdPath = \"/etc/passwd\"\n"},
+		{"缩进 const", "package main\n\nfunc f() bool {\n\tconst mode = \"/etc/passwd\"\n\treturn mode != \"\"\n}\n"},
+		{"分组 const", "package main\n\nconst (\n\ta = 1\n\tpasswdPath = \"/etc/passwd\"\n)\n"},
+	}
+	for _, c := range cases {
+		out := string(obfuscateImplantSource([]byte(c.src), testXdBase))
+		if !strings.Contains(out, `"/etc/passwd"`) {
+			t.Errorf("%s: const 里的字面量被改写（会编译失败：not constant）：%s", c.name, out)
+		}
+	}
+}
+
+// TestStillObfuscatesOutsideConst 修 const 保护不能把普通字面量一起放行。
+func TestStillObfuscatesOutsideConst(t *testing.T) {
+	src := "package main\n\nvar p = \"/etc/passwd\"\n\nfunc f() string {\n\treturn \"/etc/shadow\"\n}\n"
+	out := string(obfuscateImplantSource([]byte(src), testXdBase))
+	if strings.Contains(out, "/etc/passwd") || strings.Contains(out, "/etc/shadow") {
+		t.Fatalf("const 之外的普通字面量应照旧被混淆：%s", out)
+	}
+	if got := mustDecodeXd(t, out, testXdBase); got != "/etc/passwd" {
+		t.Fatalf("还原值 = %q, want /etc/passwd", got)
+	}
+}
+
+// TestInConstDeclEdges 直接钉住 inConstDecl 的边界，避免将来被"优化"掉。
+func TestInConstDeclEdges(t *testing.T) {
+	cases := []struct {
+		name   string
+		src    string
+		needle string // 取该子串首次出现位置的引号做判定
+		want   bool
+	}{
+		{"单行 const", "const x = \"abcdef\"", `"abcdef"`, true},
+		{"var 行", "var x = \"abcdef\"", `"abcdef"`, false},
+		{"分组 const 内", "const (\n\ta = 1\n\tx = \"abcdef\"\n)", `"abcdef"`, true},
+		{"分组 const 之后仍是顶层 var", "const (\n\ta = 1\n)\n\nvar x = \"abcdef\"", `"abcdef"`, false},
+		{"const 块结束后的新声明", "const (\n\tx = \"abcdef\"\n)\n\nvar y = \"ghijkl\"", `"ghijkl"`, false},
+		{"func 体内普通字面量", "func f() {\n\tx := \"abcdef\"\n}", `"abcdef"`, false},
+		{"常量名里有 const 前缀", "constable := \"abcdef\"", `"abcdef"`, false},
+		{"分组 const 内第二条", "const (\n\tx = \"abcdef\"\n\ty = \"ghijkl\"\n)", `"ghijkl"`, true},
+	}
+	for _, c := range cases {
+		at := strings.Index(c.src, c.needle)
+		if at < 0 {
+			t.Fatalf("%s: 用例里没有 %s", c.name, c.needle)
+		}
+		if got := inConstDecl([]byte(c.src), at); got != c.want {
+			t.Errorf("%s: inConstDecl = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 // TestRawStringObfuscatableGuards 直接钉住判定的边界（tag 与 const 之外的都放行）。
 func TestRawStringObfuscatableGuards(t *testing.T) {
 	cases := []struct {

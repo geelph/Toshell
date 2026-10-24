@@ -1,10 +1,12 @@
 package api
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
 	"strconv"
+	"unicode/utf8"
 
 	"github.com/gorilla/mux"
 	"toshell/internal/common/types"
@@ -24,8 +26,9 @@ func (s *Server) listTasksHandler(w http.ResponseWriter, r *http.Request) {
 		tasks = s.taskMgr.ListAll()
 	}
 
+	// 列表同样只回展示副本：Output 已做编码归一（原始结果仍在 task/DB 里）。
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"tasks": tasks,
+		"tasks": taskDisplays(tasks),
 		"count": len(tasks),
 	})
 }
@@ -113,7 +116,27 @@ func (s *Server) getTaskHandler(w http.ResponseWriter, r *http.Request) {
 	logging.Info("api", "Task %d status: %s, exit_code: %d, output_len: %d, error: %s",
 		t.ID, t.Status, t.ExitCode, len(t.Output), t.Error)
 
-	json.NewEncoder(w).Encode(t)
+	// raw=1：回读**原始字节**（不转换），给排障/取证/下载用。
+	// 为什么用 base64：原始输出可能是非法 UTF-8（GBK/二进制），JSON 字符串承载不了，
+	// 直接塞进 output 会被替换成 U+FFFD —— 那等于把"原始结果可回读"这条边界弄丢。
+	// 默认（不带 raw）：output/error 是服务端按展示解码后的文本（GBK → UTF-8）。
+	if raw := r.URL.Query().Get("raw"); raw == "1" || raw == "true" {
+		// 用"先序列化再补字段"而不是手抄一遍字段名：TaskInfo 新增字段时这里自动跟上。
+		payload := map[string]interface{}{}
+		if b, merr := json.Marshal(t); merr == nil {
+			_ = json.Unmarshal(b, &payload)
+		}
+		payload["output"] = t.Output // 原样（非法 UTF-8 会被 JSON 标成 U+FFFD，仅供兼容）
+		payload["output_b64"] = base64.StdEncoding.EncodeToString([]byte(t.Output))
+		payload["output_bytes"] = len(t.Output)
+		payload["output_encoding"] = "raw"
+		payload["output_is_binary"] = !utf8.ValidString(t.Output)
+		payload["error"] = t.Error
+		json.NewEncoder(w).Encode(payload)
+		return
+	}
+
+	json.NewEncoder(w).Encode(newTaskDisplay(t))
 }
 
 func (s *Server) deleteTaskHandler(w http.ResponseWriter, r *http.Request) {

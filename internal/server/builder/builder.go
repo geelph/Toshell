@@ -612,10 +612,7 @@ func (b *Builder) compile(opts BuildOptions) ([]byte, error) {
 	useGarble := b.useGarble && opts.GarbleEnable
 
 	// 通道类型：显式指定优先，否则按协议推导（http/https → http，其余 → tcp）
-	transport := opts.Transport
-	if transport == "" {
-		transport = transportForProtocol(opts.Protocol)
-	}
+	transport := resolveTransport(&opts)
 
 	// P0-1/P1-3: 先注入每构建随机的配置块魔数/密钥 + xd 密钥基准，
 	// 再执行字符串混淆（用同一随机 xd 基准），最后编译（走 Go 植入端）。
@@ -923,10 +920,7 @@ func capabilityInput(opts *BuildOptions) features.Input {
 	if arch == "" {
 		arch = "amd64"
 	}
-	transport := opts.Transport
-	if transport == "" {
-		transport = transportForProtocol(opts.Protocol)
-	}
+	transport := resolveTransport(opts)
 	return features.Input{
 		Profile:     opts.Profile,
 		Transport:   transport,
@@ -1104,7 +1098,7 @@ func (b *Builder) buildConfig(opts BuildOptions) map[string]interface{} {
 	return map[string]interface{}{
 		"server_url":    opts.ServerURL,
 		"protocol":      opts.Protocol,
-		"transport":     transportForProtocol(opts.Protocol),
+		"transport":     resolveTransport(&opts),
 		"interval":      opts.Interval,
 		"jitter":        opts.Jitter,
 		"retry_count":   opts.RetryCount,
@@ -1207,10 +1201,10 @@ func (b *Builder) GenerateQuickShellcode(sessionOS, sessionArch string, callback
 // implant 启动时通过 encMagic 常量定位块起点，按长度字段解码解析。
 // 除回连地址与加密密钥外，jitter/重连/KillDate/WorkingHours 等行为参数
 // 一并写入配置块，使同一份植入端产物可被运行时配置动态调整。
-// transportForProtocol 将构建协议映射为植入端通道类型：
+// TransportForProtocol 将构建协议映射为植入端通道类型：
 // tcp → 自定义 TCP 帧协议；http/https → HTTP(S) 轮询（域前置）；
 // websocket 当前无独立实现，回退 TCP；空 → 让植入端按 server_url 前缀回退。
-func transportForProtocol(protocol string) string {
+func TransportForProtocol(protocol string) string {
 	switch strings.ToLower(protocol) {
 	case "tcp", "":
 		return "tcp"
@@ -1223,6 +1217,24 @@ func transportForProtocol(protocol string) string {
 	default:
 		return "tcp"
 	}
+}
+
+// resolveTransport 解析本次构建实际使用的通道类型。
+//
+// 必须是"唯一口径"：编译期的 tags（决定哪些通道代码被编进产物）与写进配置块的
+// transport 字段（决定运行期选哪条通道）**必须来自同一个值**。
+// 历史实现里编译用 opts.Transport（若非空）而配置块只用 opts.Protocol 推导，
+// 一旦调用方显式给了 Transport 且与 Protocol 不一致，就会生成"编进去的是 TCP、
+// 运行期却去跑 HTTP 轮询"的产物 —— HTTP 通道未被编译时是空 stub，立刻返回并无限
+// 重连，表现为"连上即断/秒断"。统一走这里即可消除该分叉。
+func resolveTransport(opts *BuildOptions) string {
+	if opts == nil {
+		return "tcp"
+	}
+	if t := strings.ToLower(strings.TrimSpace(opts.Transport)); t != "" {
+		return t
+	}
+	return TransportForProtocol(opts.Protocol)
 }
 
 func appendConfigBlock(shellcode []byte, serverURL, encryptionKeyB64 string, opts *BuildOptions) []byte {
@@ -1238,7 +1250,7 @@ func appendConfigBlock(shellcode []byte, serverURL, encryptionKeyB64 string, opt
 		cfg["working_hours"] = opts.WorkingHours
 		cfg["relay_listen"] = opts.RelayListen
 		cfg["front_domain"] = opts.FrontDomain
-		cfg["transport"] = transportForProtocol(opts.Protocol)
+		cfg["transport"] = resolveTransport(opts)
 	}
 	jsonData, _ := json.Marshal(cfg)
 

@@ -3,6 +3,40 @@
 本项目采用 [语义化版本](https://semver.org/lang/zh-CN/)。所有值得注意的改动都会记录在本文件。
 后续优化方向（含驱动能力分档、内存执行加固、屏幕流跨平台、平台工具库与远程加载型红队能力等）见 [ROADMAP.md](ROADMAP.md)。
 
+## [v1.4.1] - 2026-10-24（补丁版）
+
+**一句话定位**：**只修"看得见、用不了"的缺陷**（显示 / 代理认证 / 预览安全 / Linux 载荷构建），不引入新攻击能力、不动协议帧格式、不改任何默认值；另交付一份 Rust 植入端可行性结论与一份参考实现分析。
+
+**本版摘要**（一行一项）
+- **显示**：Linux 会话用户名不再一律 `unknown`（`USER→LOGNAME→SUDO_USER` → `/etc/passwd` → `uid:<n>`）；杀软击杀与启动项回显的乱码修掉（根因是**整串** GBK 转换，交互回执是"UTF-8 中文 + GBK 工具输出"的混合串）。
+- **代理认证**：创建 SOCKS5 代理时可选填**用户名/口令**（RFC 1929），HTTP CONNECT 路径同样校验 `Proxy-Authorization`（否则可绕过）；**留空 = 原行为**，回执与日志不回显口令。
+- **文件预览**：按后缀白名单限制，未识别/禁用后缀**弹窗提示**（可选"仍要预览前 N KB"或下载）；**服务端二次校验**（二进制嗅探 + 图片魔数），超大只给前缀并标 `truncated`。
+- **Linux/amd64 载荷**：修掉 `light` 档在非 Windows 上**编译不过**；修掉混淆器把 `const` 字符串改坏导致**全平台构建失败**；新增**构建期通道一致性拦截**，把"协议与监听器通道不一致"这类必然"连上即断"的载荷挡在构建时。
+- **Rust 植入端**：给结论（可行）并**实测体积**：`light` 等价物 **350,720 B**（Go 同形态 2,946,805 B，**小 8.4 倍**），`light+http` 走 Windows SChannel 的 TLS 增量仅 **17,408 B**。立项 v1.6，本版**不写产品代码**。
+- **文档**：新增 `docs/VSHELL-ANALYSIS.md`（参考实现对比与取舍，含许可证红线）、`docs/RUST-IMPLANT.md`、`docs/rust-probe/`（可复现探针）；`ROADMAP.md` 整体重写。
+
+| 项 | 根因（file:line） | 改法 | 实测 |
+|---|---|---|---|
+| Linux 用户名 `unknown` | `implant/platform_unix.go:13` 只读 `USER/USERNAME`，无登录环境（systemd / cron / `docker exec` / ssh 命令）为空 | 新增 `implant/username.go`：环境变量链 → `os.Getuid()` + 解析 `/etc/passwd` → `uid:<n>` → 最后才 `unknown`；纯函数可喂假内容单测 | 单测覆盖 uid = -1/0/1000/4242 与读失败；linux 载荷构建 200 |
+| 击杀 / 启动项乱码 | `implant/main.go:1811`（旧）对**整串**输出无条件 GBK 转换，而回执是 UTF-8 中文 + GBK 工具输出的混合串 | 植入端新增 `decodeConsoleText`（**逐行**判 UTF-8，合法行原样、非法行才转，对 UTF-8 幂等）；服务端补唯一展示漏斗 `api/output_display.go`（UTF-8 → GBK → 仍非法则显式标注 + 十六进制预览） | 前后对比：`[+] 鎸佷箙鍖栨垚鍔?` → `[+] 持久化成功`；`== EDR Kill (鍑绘潃) ==` → `== EDR Kill (击杀) ==`，同一串里的 taskkill 报错仍正确 |
+| 启动项回显结构 | `persistence list` 直接回 `json.Marshal(methods)` | 输出固定字段序的管道表（表头恒非空 + 末尾方法数） | 6 行可读表格 |
+| 代理认证 | 旧 SOCKS5 握手只接受 `0x00`（无认证），无 RFC 1929 分支 | 新增 `internal/common/tunnel/auth.go`（字段校验、常量时间比较、子协商、HTTP Basic）；`createTunnelHandler` 增可选 `auth_user`/`auth_pass`，回执只给 `auth_enabled` | `[05 01 00]`→`05 ff`；正确口令 `05 02`+`01 00`；错误口令 `01 01`；HTTP 无凭据 407、有凭据 200；`curl --socks5` 三态与协议层一致 |
+| 文件预览 | 旧预览在前端嗅探，未识别/二进制只会静默显示"无法预览" | 新增 `internal/common/preview`（白名单/黑名单/未识别/阈值/二进制嗅探/图片魔数）+ `GET /files/preview-policy` + `POST /sessions/{id}/files/preview`；前端 `previewPolicy.ts` 与弹窗；`/files/transfer` 强制 `attachment + nosniff + CSP sandbox` | `.log/.png` 200；`.exe/.zip` 415；`.xyz/.svg` 409（force 后 200）；2 MB 文本 200 且 `truncated=true`；伪装二进制 `.txt` 415；HTML 内容 `.png` 415 |
+| Linux 载荷两处编译 bug | ① `blob_unix.go:1` 标签只有 `!windows`，与 `features_stub_light.go`（light）重复定义 `runMappedImage`；② 混淆器把 `const` 字面量改写为 `xd(...)` 后不是常量 | ① 标签改 `!windows && !light` + 新增 `blob_unix_light.go`；② 新增 `inConstDecl()` 覆盖单行/缩进/分组 `const` | 72 组（GOOS×transport×profile×tag）重复声明矩阵测试（含负向验证）；linux light tcp 3,273,099 B、full tcp 3,309,963 B 构建 200 |
+| 「秒断」根因收敛 | 通道与监听器类型不匹配 → 0 ms RST → 无限重连（实测向 TCP 监听器发 `POST` 得到 `forcibly closed`） | 新增构建期拦截 `listenerChannelMismatch`（协议与监听器通道不一致直接 400 并说明原因）；`transport` 单一口径 `resolveTransport`（编译 tag 与配置块不再来自两个来源）；`GET /builders` 的 `protocols` 补上漏掉的 `tcp` | 实测向 TCP 监听器发 HTTP POST → `elapsed=0s` 被关连接；构建器与 API 测试全绿 |
+
+**如实边界（本版没做到的）**
+- **Linux 运行时未验证**：本机无 WSL/Docker/Linux，只到"构建期 + 纯函数单测 + 静态 ELF 检查"这一层；"启动即 panic / 被 EDR 杀"**证伪不了**。
+- **历史乱码不可回溯**：旧载荷产生的是"合法但错误的 UTF-8"（`鍑绘潃`），服务端无法判定与逆转；**只有重新部署新载荷后的新结果正确**。另：JSON 结果通道本身承载不了非法 UTF-8（`json.Marshal` 会替换成 U+FFFD），真正的修复点必须在客户端（已做），服务端展示层只兜旧数据/其它来源。
+- **代理认证只在 C2 侧的 SOCKS5 监听器**：植入端是原始 TCP 中继、不解析 SOCKS5，因此不存在"老植入端不支持"的协议兼容问题；请求了认证但服务端没开启时，前端**fail-closed**（自动停掉该代理并报错），不会静默降级成无认证。
+- **预览是同步等待**（25 s 超时，>64 MB 直接 413）；超大文本只回前 64 KB，但**植入端仍会回传整个文件**（下载链路没有 range 读取，属既有设计）。
+- **Rust 植入端只有可行性结论与体积探针**，没有产品代码；`full` 档体积（650 KB~1 MB）是**推导值**，必须等实做完再替换成实测值。
+
+**其它**
+- 新增 `GET /api/v1/tasks/{id}?raw=1`：无损回读原始输出（`output_b64` / `output_bytes` / `output_is_binary`），展示层转换不再有"看不回原文"的代价。
+- 任务失败也保留输出（`FailWithResult`），不再只剩一句错误。
+- `go test ./...` **22 个包全 ok**；两份植入端镜像 **62 个 `.go` 逐文件 SHA-256 一致**。
+
 ## [v1.4.0] - 2026-09-28（已发布）
 
 **一句话定位**：把 C2 从"能用"推到"能长期稳定用" —— S1~S6 六个阶段 + 两次 AI/agent 修复，每阶段本地验证并与实测数据一并落档；未验证项如实标注（条目见 [ROADMAP.md](ROADMAP.md)）。

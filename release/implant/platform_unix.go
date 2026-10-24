@@ -11,14 +11,9 @@ import (
 )
 
 func getUsername() string {
-	username := os.Getenv("USER")
-	if username == "" {
-		username = os.Getenv("USERNAME")
-	}
-	if username == "" {
-		username = "unknown"
-	}
-	return username
+	// 兜底链见 username.go：USER/LOGNAME/SUDO_USER → uid + /etc/passwd → uid:<n> → unknown。
+	// 旧实现只看 USER/USERNAME，服务/容器等无登录环境的 Linux 会话会一律显示 unknown。
+	return getUsernameUnix(os.Getuid(), os.Getenv)
 }
 
 func getDefaultDir() string {
@@ -106,3 +101,7 @@ func killProcess(pid uint32) (string, int32, string) {
 func gbkToUTF8(data []byte) []byte { return data }
 
 func utf8ToGBK(data []byte) []byte { return data }
+
+// decodeConsoleText：非 Windows 平台输出本来就是 UTF-8（/bin/sh 的 locale 通常 UTF-8），
+// 原样返回。语义与 Windows 版一致（Windows 版只对非 UTF-8 的行做 GBK→UTF-8）。
+func decodeConsoleText(s string) string { return s }

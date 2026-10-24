@@ -174,10 +174,7 @@ func (b *Builder) compileSharedLibrary(tmpDir, targetOS, arch string, opts Build
 	if autoStart {
 		tags = append(tags, "autostart")
 	}
-	transport := opts.Transport
-	if transport == "" {
-		transport = transportForProtocol(opts.Protocol)
-	}
+	transport := resolveTransport(&opts)
 	if extra := buildTagList(transport, opts.Profile, opts.EvasionScan, opts.BofEnabled, opts.ExecModule); extra != "" {
 		tags = append(tags, strings.Fields(extra)...)
 	}

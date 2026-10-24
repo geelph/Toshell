@@ -349,6 +349,9 @@ func (s *Server) SetWebFS(fs http.FileSystem) {
 }
 
 // BroadcastTaskEvent sends a task result event to all WebSocket frontend clients.
+//
+// output/error 在这里做展示层编码归一（GBK → UTF-8）：WS 事件是纯展示通道，
+// 转换不会影响任务存储里的原始结果（边界说明见 output_display.go）。
 func (s *Server) BroadcastTaskEvent(eventType string, taskID uint64, sessionID string, taskType string, exitCode int32, output string, errorMsg string) {
 	if s.wsHub == nil {
 		return
@@ -360,10 +363,10 @@ func (s *Server) BroadcastTaskEvent(eventType string, taskID uint64, sessionID s
 		"exit_code":  exitCode,
 	}
 	if output != "" {
-		payload["output"] = output
+		payload["output"] = displayOutput(output)
 	}
 	if errorMsg != "" {
-		payload["error"] = errorMsg
+		payload["error"] = displayOutput(errorMsg)
 	}
 	s.wsHub.Broadcast(WSEvent{
 		Type:    eventType,
@@ -505,6 +508,9 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/sessions/{id}/files/download", s.downloadFileHandler).Methods("POST")
 	api.HandleFunc("/sessions/{id}/files/upload", s.uploadFileHandler).Methods("POST")
 	api.HandleFunc("/sessions/{id}/files/delete", s.deleteFileHandler).Methods("POST")
+	// 文件预览：规则清单 + 服务端二次校验（黑名单/未识别/超大/二进制）。
+	api.HandleFunc("/files/preview-policy", s.previewPolicyHandler).Methods("GET")
+	api.HandleFunc("/sessions/{id}/files/preview", s.previewFileHandler).Methods("POST")
 	api.HandleFunc("/files/transfer", s.transferFileHandler).Methods("GET")
 	api.HandleFunc("/sessions/{id}/processes", s.listProcessesHandler).Methods("GET")
 	api.HandleFunc("/sessions/{id}/processes/{pid}", s.killProcessHandler).Methods("DELETE")

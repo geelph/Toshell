@@ -1,459 +1,471 @@
-# ToShell 后续优化路线（ROADMAP）
+# ToShell 后续路线（ROADMAP）
 
-> **本文只回答三件事：做完没、还差什么、下一步做什么。** 每条只保留现状（代码事实）、剩余项与验收口径，不重复发版说明。
-> **状态口径只有一处**：下方「v1.4.0 状态总览」表（一行一个交付项，取值仅 `✅ 完成` / `🟡 部分完成` / `❌ 未开工` / `⚠️ 卡在本地 stash` / `🚫 已定论不做`）；「后续优化清单」给收尾顺序与四段验收口径；各阶段详情只补充方案与证据，不另判状态。
-> 已完成的项归档在本文件底部「已完成」章节；更新日志（实现细节）见 [CHANGELOG.md](CHANGELOG.md)，免杀实现现状见 [docs/EVASION.md](docs/EVASION.md)，不落地上线手段见 [docs/LOADERS.md](docs/LOADERS.md)。v1.4.0 之前的 P0~P3 条目池降为「附 A」（只保留背景与验收口径，不再单独判状态）。
+> **当前版本：v1.4.1（补丁版，本轮交付）** · **基线版本：v1.4.0（2026-09-28 已发布，tag 不动）**
+> 本文只回答三件事：**现在做到哪、下一步做什么、什么明确不做**。每条只保留「代码事实 / 剩余项 / 验收口径」，不重复发版日志（细节见 [CHANGELOG.md](CHANGELOG.md)）。
+> 配套文档：[docs/EVASION.md](docs/EVASION.md)（免杀实现与验证状态）、[docs/LOADERS.md](docs/LOADERS.md)（不落地未签名 PE 的落地链）、[docs/DEPLOY-DOMAIN-CDN.md](docs/DEPLOY-DOMAIN-CDN.md)（域名/CDN/域前置）、[docs/VSHELL-ANALYSIS.md](docs/VSHELL-ANALYSIS.md)（第三方参考实现分析）。
 
----
+**状态取值只有 5 个，不许含糊**：
 
-## 当前版本状态（v1.4.0 已发布 · 2026-09-28；下表为 v1.3.5 基线）
-
-| 能力 | 状态 |
-|---|---|
-| 会话判活 | ✅ 不再抖动（阈值含 3 倍心跳余量 + 广播去抖；实测 60s 心跳连跑 220s 零抖动、真掉线仍按 3m1s 判死） |
-| 屏幕流/截图（Windows） | ✅ 参数化（fps/quality/max_kbps/monitor/max_width）+ 带宽自适应 + 服务端限速；实测 2560×1440 → 640×360（343KB → 21KB） |
-| 屏幕流/截图（Linux/macOS） | ❌ 仍为 stub（`screen_stream_unix.go` 只回 "only supported on Windows"）；跨平台排期见「后续优化清单」第 9 项 |
-| 内存执行 | ✅ shellcode / BOF / DLL / **EXE（反射映射 + 参数注入）**；✅ **下发前 PE 预检**（Go 载荷/架构不符/.NET 直接拒绝，TLS 无重定位给警告，可 `force` 强制） |
-| BYOVD 驱动 | ✅ **不内置任何驱动**（操作员自备 .sys + manifest 档案）；✅ 驱动击杀/档案登记/会话级记忆；✅ **加载前自检**（sha256 一致性硬拦 + Authenticode 签名者 + 易受攻击驱动黑名单提示） |
-| C 植入端工具链 | ✅ 探测鲁棒（配置/环境变量/便携目录/注册表 PATH）+ 架构校验 |
-| 通知 | ✅ 飞书/钉钉/企业微信/Slack/Discord 各自结构 + 业务码判定 |
-| 运行时行为足迹 | ✅ 启动自动"枚举进程找杀软"默认关闭（`evasion_scan` 显式开启）；pclntab 高信号名中性化；**BOF 默认不编译（`beacon*`=0）**；**Go buildinfo/构建 ID 已擦除**；启动延迟/心跳节奏可按载荷配置 |
-| 构建后代码签名 | ✅ pfx / 证书存储指纹两种模式 + 签名栈回退 + 签名后复核 + 前端显示；本机实测自签已签上（`SignatureType=Authenticode`、+1.4KB），"链不受信任"与"未签名"已如实区分 |
-| 加载器链模板 | 🟡 8 条链的**命令模板与降级建议**已实现（`oneliner.go` + `docs/LOADERS.md`）；**真机落地实测未做**（无验收环境，见总览 S3 行） |
-| 动态免杀（运行时行为） | 🟡 第一批已实现（sleep mask 休眠期内存加密 + apihash/PEB 手工解析 + 直接系统调用 + 去 RWX）；**运行期零实测**（本机杀软会删除任何新生成的 PE） |
-| Web 控制台 | ✅ 主题 token 统一 + 组件层（卡片/分组/徽标/提示条/空态/骨架屏）+ 键盘焦点可见；生成载荷页分组折叠、命令分组/搜索/风险等级、载荷 ID 一键复制与填入、签名结论与落地建议；会话详情「更多 ▾」收纳；顶栏状态为真实 `/health` 探测 |
-| 发版门禁（脚本与 CI 校验） | ✅ `scripts/e2e_smoke.ps1`（临时服务端 + 三档载荷 + 关键接口 + 可选真植入端上线，实测 19 项 0 失败）+ CI 侧 tag/版本号一致性、zip 内容清单与 `checksums.txt` |
-| 发版门禁（接进 CI） | ❌ 未做：tag 前 workflow 还没调用 `e2e_smoke.ps1`（见「后续优化清单」第 10 项） |
-| 平台工具库 `data/tools/` | ❌ 未建设（目录下只有 `.gitkeep`，无 manifest、无工具）；排期见「后续优化清单」第 7 项 |
-
-> **v1.4.0 迭代项的完成情况不在本表** —— 唯一权威口径是下方「v1.4.0 状态总览」，同一件事只在一处判状态。
-
----
-
-## v1.4.0 迭代计划（已随 v1.4.0 发布落地 · 剩余项转入「后续优化清单」）
-
-> **执行方式**：分 6 个阶段，每阶段**先在本地完成实现与验证**（编译 / 类型检查 / 单元测试 / 本地服务端与 UI 联调），确认通过后再提交推送。
-> **详细方案**（接口签名、DDL、YAML、协议报文、里程碑人日、验证矩阵）保存在本地文档 `docs/plan/*.md` 与 `docs/PLAN-NEXT-ROUND.md`（**不入库**）；本节即为其入库版本。
-> **状态取值只有 5 个，不许含糊**：`✅ 完成`（已实现 + 有实测证据）/ `🟡 部分完成`（主体做了，**未做子项写在同一行的"剩余什么"里**）/ `❌ 未开工` / `⚠️ 卡在本地 stash`（被叫停的半成品）/ `🚫 已定论不做`（附依据）。
-
-### v1.4.0 状态总览
-
-| 交付项 | 状态 | 一句话依据（实测/证据） | 剩余什么 |
-|---|---|---|---|
-| **S1** 开放 MCP 接口 + 公共执行基础设施 | ✅ 完成 | 注册表 38 工具（read 13 / confirm 14 / danger 11）三处同源；`scripts/mcp_smoke.ps1` **18/18**（无/错 token 401、会话头 400、危险默认 403、路径穿越 403、超 RPM 429）；`go test ./internal/server/mcp/...` ok | 无 |
-| **S2** 内置 Agent 长任务可靠性 | 🟡 部分完成 | 状态机 + 4 张表 + `agentstore` + 重启对账、长结果外置回读、上下文四层 + token 双预算、三处硬上限 + 防死循环、分级审批、trace + SSE 断点续传**全部落地**；离线黄金集 **12 例**随 CI；`go test ./...` 全绿（13 包）；`scripts/e2e_smoke.ps1` 19 项 0 失败 | ① 评估门禁的**在线**部分（`/agent/metrics` + 前端状态条，原计划标为可选）未做；② `tasks.output` 仍截断 **500 字节**，限制重启恢复的结果长度；③ 挂起会重置 `max_wallclock`/`max_turns`，token 用量未落 `agent_runs`；④ `ai.long_task_threshold_sec` 只走 YAML，未进设置页 PUT 白名单 |
-| **AI 修复 ①** 流式调用改空闲超时 + LLM 失败原因可见 | ✅ 完成 | commit `db2bccd`；`ai.timeout` 语义从"整段回答上限"改为"连续多久没收到数据"，出错兜底正文**必带失败原因** | 无 |
-| **AI 修复 ②** `assistant.tool_calls` 与 `tool` 回执不成对导致 400 | ✅ 完成 | commit `27dbb90`；缺 id 补 `call_auto_<index>`，新增 `context.sanitizeToolPairs()` 装配出口补齐 + `tool_pair_test.go`（6 子用例）；`go test ./...` **19 包全 ok** | 无 |
-| **缺陷 ①**（本轮新发现）前端把 run 跨轮时间线当"本轮步骤"重画 + 每轮 SSE 水位线从 0 起 | ❌ 未开工 | 代码事实：`web/src/pages/Copilot.tsx` 的 `buildActs()` 用 `tl.slice(-80)` 整条 timeline 重画（未按 `run_id + seq` 去重）；服务端对终态 run 的无水位线订阅会回放缓冲尾部。表现为界面"看起来又重复执行了一遍"（已实测**不影响模型输入**） | 前端按 `run_id + seq` 去重；服务端让终态 run 不再被无水位线订阅回放（详见「后续优化清单」第 1 项） |
-| **缺陷 ②**（本轮新发现）同一条 assistant 消息里的第二个并行 `tool_calls` 被静默跳过 | ❌ 未开工 | 实测：一次声明 `session_list` + `session_context`，审计日志只有第一个，第二个**既没执行也没记录**；目前仅由 `sanitizeToolPairs()` 补的"未完成回执"兜住协议正确性 | 定位并行 `tool_calls` 的处理/去重路径并修复 + 黄金集用例钉住（详见第 2 项） |
-| **S3** 静态降特征（字符串混淆盲区 / DLL 路径 / Go 版本串 / PE 资源 / `.symtab`） | ✅ 完成 | 实测：DLL 明文高信号 API 名 11 处 → 0、`http://` 2 → 0、ETW 4 → 0；`go1.20.14` 残留 1 处 → 0；资源开启后 +2048 B（默认不注入时字节数与改前完全一致）；`.symtab` 删除后 **−512 B**、节数 6→5；五份产物 `LoadLibraryEx` **5/5 LOADER OK** | 已知边界：C 植入端（mingw）未接入资源修补；**签名后的真实复核仍需真实证书**（本机只有顺序契约 + 单测） |
-| **S3** 落地链与验收环境 | ❌ 未开工（缺验收环境与材料） | 8 条链目前只有**命令模板与降级建议**，无一条真机落地记录；本机未签名 PE 在**进程创建阶段**即被拒（连 Hello-World Go 也一样）→ 本机做不出运行期结论；两级验收环境至今未建立 | 真实证书/EV + 信任链落地；白加黑 / 不落 PE 加器链真机实测；干净 VM（仅 Defender）+ 装 360 的目标机 + 宿主 exe/DLL/SCT 素材 |
-| **S3** 动态免杀批次 2（C2 地址/sessionID 改 `[]byte` 纳入 sleep mask、启动期 ntdll 脱钩 + ETW patch、单稳加固） | ❌ 未开工 | 批次 1（sleep mask / 去 RWX / apihash）已实现但**运行期零实测**；批次 2 未动一行代码，且依赖批次 1 的验收环境 | 同上一行（放行环境 / 目标机）；另需把 `docs/EVASION.md` §3.1 的动态测试矩阵脚本化 |
-| **S4** 能力位图（前置阻塞项） | ✅ 完成 | `internal/common/features` 唯一纯函数（档案/tag/OS → 能力集 + `tabs` + `cap:v1:<hex>`）烘进载荷并随心跳上报；服务端 `Resolve()` 上报优先、老载荷按 OS 兜底并标 `source`。实测 light 载荷 **11 项**能力、tabs 仅 av·files·info·process·shell；full **31 项** | 无（"light 档也点亮注入/截图按钮"的旧缺陷已修） |
-| **S4** `exec_module` 契约与 ABI | ✅ 完成 | `internal/common/moduleabi`（ABI v1，三份副本单测钉住）+ 一次性 token + 9 步校验链 + `TypeModuleData(0x0E)`；实测门控 **+27,136 B**、示例模块 **7,680 B**、`credentials` 搬模块可省 **67,584 B**；真机 E2E **21/21**、两份植入端镜像 **63 文件 SHA-256 一致** | 已知边界：**只真机测过 TCP 通道**（HTTP/WS/MQTT 已接线未真机跑）；单帧上限 **4 MiB** 未做分块；**未暴露给 MCP/Agent 工具面** |
-| **S4** 体积实测矩阵（V0~V7） | ✅ 完成 | windows/386 同参数实测（发布版口径）：地板 801,280 B；核心标准库地板 2,010,624 B；light/tcp **2,946,805 B**；+`bof` = **0**；+`evasionscan` = +7,168 B；http **+2,508,808 B**；websocket **+2,150,923 B**；mqtt +2,452,993 B；full/tcp **+575,488 B** | 无（矩阵已落成本文件 S4 阶段的表格） |
-| **S4** 体积分档结论（nano / light / full） | 🟡 部分完成 | light / full 两档已实现且有实测；但**目标体积未达成**（light 实测 2.95 MB > 目标 2.4 MB；full 3.52 MB > 目标 3.2 MB）；且**默认档仍是 `full`**（代码事实：`features.NormalizeProfile("")` → full、前端生成载荷页默认 `profile:'full'`）—— 本文件旧版"默认档改为 light"的说法与代码不符，已更正 | ① 默认档是否改 `light` 需明确定论；② `light ≤2.4 MB` 只能靠 stdlib 瘦身（手写 JSON/精简 `fmt`、避开 `crypto/tls`）后重测；③ 每档的功能对账表与构建命令待补齐 |
-| **S4** nano（≤1.8 MB） | 🚫 已定论不做 | 实测核心标准库地板 **2.01 MB**（`net`+`json`+`fmt`）已高于 nano 目标 1.8 MB；Go 做不到，要做得换第二套 C 植入端，工作量与维护成本远超收益 | 不排入 v1.4.0；若日后有"≤1.8 MB 且要跨平台"的硬需求再单独立项 |
-| **S4** 传输栈瘦身与模块化 | 🚫 已定论不做 | 实测 http/ws/mqtt 各 +2.1~2.5 MB，但这是 `net/http` + `crypto/tls` 的成本、**不是可裁剪的冗余**：现有构建已按通道 tag 只编一个传输，没有重复可回收；想省只能手写 TLS（不现实且不安全）或换 uTLS（只会更大） | 保持现状；把"要小就选 tcp 档"写进分档说明即可，不再为此投入 |
-| **S4 / P2** 工具库与远程加载 | ❌ 未开工 | 代码事实：`data/tools/` 下只有 `.gitkeep`，无 `manifest.json`、无任何工具、无下载校验代码 | 目录规范 + `manifest.json`（sha256/来源/许可）+ 远程加载闭环「下载→校验→内存加载→执行→回传→清理」；需第三方下载源与哈希清单策略（第 7 项） |
-| **S5 第 0 步** WS 主动探测面收敛（严格 `ws_path` + Host 名单 + `front_domain` + 中继 409） | ✅ 完成 | 改前**任意路径**都能升级、普通 GET 也回 400 + `Sec-Websocket-Version`（等于自报 WS 端点）；改后只对一条路径升级，变形路径/不完整握手一律普通 **404**（与未知路径逐字节不可区分）；`go test ./...` 全绿 + 真机 E2E（WS 载荷上线 + `whoami`、`curl --path-as-is` 探测不可区分、错 Host 被拒）；中继对非 TCP 通道明确 409 | 无 |
-| **S5 第 0 步延伸** uTLS/JA3、WS 拟态、HTTP/2、真实 CDN 域前置 | ❌ 未开工 | 代码事实：WS 仍走 Go 标准库 TLS（本步不改 TLS 指纹、不加新 tag、不动 `go.mod`）；非 C2 路径只回 404、不反代伪装站；`ws_path` 还是全局配置，无 per-listener 覆盖 | 真实 CDN 域与证书做域前置联调；uTLS / 拟态 / HTTP/2 逐项实现 |
-| **S5** 首个新通道（DNS/DoH/DoT、QUIC/HTTP2 之一） | ❌ 未开工 | 代码无对应实现（`internal/common/tunnel/quic/` 有可复用骨架但未接线）；成本约束：加一个新协议 = **12 类落点 / 20+ 处编辑**，其中 8 处"漏改就静默降级或编译失败" | 先端到端跑通**一条**（真实服务端 + 模拟植入端脚本联调）；按 tag 编译、默认只带 1~2 个通道；DoH/DoT 需域名与委派运维（第 8 项） |
-| **S6** AV-L0 侦察 / AV-L1 温和 | ✅ 完成 | `internal/common/avops` 表驱动分级 + 8 个既有动作全部登记（逐条核对植入端 `executeTask` 与能力位）；聚合入口 `GET/POST /api/v1/sessions/{id}/av-ops`（服务端定级 + 七步前置检查 + 影响评估 + 审计）；**L0 `av_detect` 真实下发回传实测**；`go test ./...` 18 包全绿；注册表仍 38 工具 + 两条守卫测试钉住"L1+ 不可能经工具面触达"；前端「对抗分级」面板已上线 | 无（协议层唯一保底口径见阶段详情：植入端每次新连接会 `clearResultCache()`，"同一 task ID 再送一次必再执行"在协议层仍成立） |
-| **S6** L2 / L3 / L4 真实执行验证 | 🟡 部分完成 | 已有实测：L2+ 默认 `allow_l2/l3/l4=false` → **被拒**（缺 confirm→409、tier 不符→400、未知动作→400、L2→403、L3 无驱动→409、超上限→400，且被拒动作**没有产生任何任务**）；L0 真实下发回传有记录。**放行路径零实测** | **L2/L3/L4 真实执行未验证**（需授权 VM + 快照 + 操作员自备 `rw`/`kill` 档 `.sys`）；面板侧"破坏性动作成功下发"分支同样未实测（真机只点到"弹确认层后取消"） |
-| **S6** L4 落地动作 | ❌ 未开工 | 代码事实：`TierL4.Implemented = false`、`ActionsOfTier(TierL4)` 为空（有单测断言为 0）；`avops.allow_l4=true` 也不会让任何动作变成可下发（刻意不造"点了没反应"的假入口） | 需要植入端独立的 AMSI/ETW 抑制任务类型 + 登记进 L4 + 前端入口。AMSI patch 对 Go 默认载荷收益≈0，只在进程内加载 .NET/脚本时才有意义 |
-| **S6** 驱动体系（`purpose` 选路 / 残留驱动清场 / catalog 签名驱动） | ❌ 未开工 | 代码事实：`ppl_kill` 仍只走句柄窃取；无按 `purpose`(kill/rw/both) 自动选路、无进程重启后的残留驱动服务清场、catalog 签名驱动只能给"未内嵌签名" | **纯代码项、无外部材料硬前置**（可先做）：`purpose` 选路 + 缺档时明确提示"无 rw 档驱动，PPL 清除不可用（走句柄窃取）" + 清场任务 + `CryptCATAdminCalcHashFromFileHandle` |
-| **S6** 内存执行加固（hook `ExitProcess`/`RtlExitUserProcess` + stdout/stderr 重定向） | 🟡 部分完成 | 已从 `git stash@{0}` **捡回并补完**（新增 `mexecguard_windows.go` + `imgexec_windows.go` 重构 + `apihash_windows.go` 转发导出修复 + `memprotect_windows.go` 注销 + `config.go`/`handlers_auth.go`/`handlers_settings.go`/`task.go` 与四个 listener），含同 stash 的**「配置热重载报错可见」**；真机实测（windows/386 植入端 + mingw 32 位 `exit7.exe`，TCP 全链路）：改前 HEAD 模板下载荷执行**当秒** `Connection cleared` → 15s 后 `广播 session_offline`、任务停在 `sent`；改后 30s 内 **15 次采样全程 `active`**、退出码 **7**、载荷 stdout `HELLO_MEMEXEC`、`whoami` 回执正常，连续两次 `exe_mem` 与 `exit` 自杀均正常；配置写坏 → error 级原始错误 + `/settings` 回传原文 + `/health` `ok:false` | ① 运行时 `GetProcAddress` 解析地址后裸调 / 静态链入的退出调用**拦不到**；② `TerminateProcess(自身真实句柄)`/`NtTerminateProcess(真实句柄)` 放行（桩只认 `GetCurrentProcess()` 伪句柄）；③ `WriteFileEx`/`NtWriteFile`/自开 `CONOUT$` 的输出不捕获，**且宿主自身没有有效 std 句柄时（无控制台方式启动，例如被 WMI/服务拉起）同样捕获不到** —— 此时结果里会明确写"未捕获到任何内容（可能原因…）"而不是给空串；④ 原计划的 **inline hook 双保险未做**（只做 IAT 层）；⑤ `dll` 路径在宿主线程上同步执行被映射代码，该分支**未真机验证**（详见 S6 阶段详情 P0-2 段） |
-| **S6** 屏幕流 / 截图跨平台（P0-3） | ❌ 未开工 | 代码事实：只有 Windows 实现（GDI BitBlt + PrintWindow 回退）；`screen_stream_unix.go` 是 stub（`//go:build !windows && !light`，直接返回 "only supported on Windows"）；无 X11 / ScreenCaptureKit / DXGI 代码 | Linux(X11) / macOS(ScreenCaptureKit) / Windows DXGI 增量捕获；三项都必须真机验证（第 9 项） |
-| **S6** 工程收尾（P3） | ❌ 未开工 | `scripts/e2e_smoke.ps1` 已存在但**未接进 CI**；前端任务列表虚拟滚动、Sessions/仪表盘 WS 事件统一订阅、运行指标上界面、服务端在线更新均无实现 | e2e 接 CI（零依赖可先做）；多通道语义对齐；配置热更新边界文档化；前端虚拟滚动 + WS 统一订阅；可观测性上界面；自更新（需先做服务化守护 + 可信更新源决策，第 10 项） |
-
-### 后续优化清单（按优先级，v1.4.0 发布后收尾）
-
-> **排序依据**：① 先修**用户已实测到的**正确性/可观察性缺陷（改动小、收益直观）→ ② 再处置**已有半成品**（丢掉就白丢）→ ③ 再做**零外部材料依赖**的纯代码项（可与其他项并行）→ ④ 最后做"**没有操作员提供的材料就无法验收**"的事，并按"谁阻塞谁"排（S3 验收环境是动态批次 2 与 S6 真机验证的共同前置，所以排在它们前面）。
-> 本清单取代旧版「下一步优先级」表：编号即执行顺序，每项补齐"做什么 / 为什么 / 验收口径 / 需要你提供什么"四段。
-
-#### 1. 前端时间线 + SSE 水位线去重（"看起来重复执行"）
-
-- **做什么**：`web/src/pages/Copilot.tsx` 的 `buildActs()` 改为按 `run_id + seq` 增量渲染（不再对整条 timeline 做 `tl.slice(-80)` 重画）；`agentApi.events()` 保存每个事件的 `id:` 水位线并以其续订；服务端让**终态 run 的无水位线订阅不再回放缓冲尾部**。
-- **为什么**：本轮**用户直接实测反馈**的缺陷 —— 界面把前几轮步骤重画一遍、上一轮答复正文被再追加一次，掩盖真实进度（已实测**不影响模型输入**，属显示/续接层）。改动小（前端为主 + 服务端一处），收益最直观。
-- **验收口径**：同一 run 连发 3 条指令，界面上每轮步骤只出现一次、无重复正文；服务端新增断言"终态 run 无水位线订阅不回放"；`npm run build` 通过 + `go test ./internal/server/ai/...` 绿。
-- **需要你（操作员）提供什么**：无。
-
-#### 2. 同一条 assistant 消息里的第二个并行 `tool_calls` 被静默跳过
-
-- **做什么**：`internal/server/ai/` 循环里的 `tool_calls` 处理改为遍历**全部**声明项（不得因第一个已处理/去重而跳过后续），并补审计与 `tool` 回执。
-- **为什么**：Agent **正确性**缺陷 —— 模型声明了工具却不执行、也不留痕，模型只能靠"未完成回执"重试，任务会静默走偏；现在只有 `sanitizeToolPairs()` 兜住协议正确性。
-- **验收口径**：一次声明 `session_list` + `session_context`，两者都进审计与 `tool` 回执；新增黄金集用例（`internal/server/ai/testdata/golden/cases.json`）；`go test ./internal/server/ai/...` 绿。
-- **需要你（操作员）提供什么**：无。
-
-#### 3. 捡回 / 丢弃 `git stash@{0}`，补完内存执行加固 —— ✅ 本轮已完成（保留编号以免打断交叉引用）
-
-- **做什么**：先决策**捡回还是丢弃重做**，然后补完 hook `ExitProcess`/`RtlExitUserProcess`（IAT + inline hook 双保险，把载荷退出改成只退线程 → 宿主不掉线）与 stdout/stderr 重定向捕获；同 stash 里被叫停的「配置热重载报错可见」（`config.go` / `handlers_settings.go` / `handlers_auth.go` / 四个 listener）一并处理。
-- **为什么**：它是 S6 验收项"`exe_mem` 跑原生工具后植入端不掉线"的**前置**；半成品已 20 文件 / +454 −204，丢掉等于白丢已完成的重构，捡回则需复核被叫停处的正确性（`release/implant/*` 镜像要同步）。
-- **验收口径**：`attrib.exe`/`cmd.exe` 在 `exe_mem` 下执行完植入端**不掉线**、带输出的工具能拿到回传内容；配置热重载出错时设置页能看到原因（不再静默失败）；`go test ./...` 全绿。（真机放行环境见第 4/5 项。）
-- **结果（本轮）**：已**捡回并补完**（`git stash@{0}` 仍保留作备份，未 drop）。真机验收：改前 HEAD 模板下载荷执行**当秒掉线**（`Connection cleared` → 15s 后 `广播 session_offline`、任务停在 `sent`），改后 30s 全程 `active` + 退出码 **7** + stdout `HELLO_MEMEXEC` + `whoami` 回执 + 连续两次 `exe_mem` + `exit` 自杀均正常；配置写坏 → error 级原始错误 + "继续使用旧配置" + `/settings` 回传原文。`go build`/`go vet`/`go test ./...`（**19 个测试包**）全绿、两份镜像 **64 文件 SHA-256 一致**。**未做**：inline hook 那一半（IAT 层已够用，理由见 S6 阶段详情）；`attrib.exe`/`cmd.exe` 本身未单独跑（用的是等价的自编 32 位原生 exe）。
-- **需要你（操作员）提供什么**：无（本轮已闭环）；若要扩到 amd64 与 HTTP/WS/MQTT 通道可再排一轮。
-
-#### 4. S3 验收环境 + 落地链
-
-- **做什么**：建立两级验收环境与测试矩阵脚本（干净 VM（仅 Defender）+ 装 360 的目标机）；真实代码签名（pfx/EV）+ 信任链落地；白加黑 / 不落 PE 加器链真机实测（`oneliner.go` 8 条链 + `docs/LOADERS.md`）；并把"在哪一层被拦 → 该做哪一类改造"的判定矩阵落成脚本。
-- **为什么**：**没有目标机，S3 全部结论都无法验收** —— 当前所有免杀结论只有静态/结构级证据（字节数、节表、loader 接受性、单测）；它同时是第 6 项（动态批次 2）的前置。本机连新生成的 PE 都无法执行（进程创建阶段即被拒）。
-- **验收口径**：目标机上给出"**签名载荷可执行 / 白加黑链可执行**"的实测记录；干净 VM（仅 Defender）里默认载荷执行后 5 分钟内不触发 `Behavior:` 类拦截；判定矩阵脚本能输出"被拦层级 → 改造类别"。
-- **需要你（操作员）提供什么**：**真实代码签名证书或 EV 证书**；**干净 VM（仅 Defender）+ 装 360 的目标机**；宿主 exe / DLL 名 / SCT 等加器链素材。
-
-#### 5. S6 驱动体系 + L2/L3/L4 真机验证 + L4 落地动作评估
-
-- **做什么**：`purpose`(kill/rw/both) 真正驱动选路（`ppl_kill` 自动挑 `rw` 档，没有就明确提示）；进程重启后残留驱动服务清场任务；catalog 签名驱动（`CryptCATAdminCalcHashFromFileHandle`）；然后在授权 VM 上逐个放行 L2/L3/L4 做真机验证，并评估 L4 的落地动作（植入端独立 AMSI/ETW 抑制任务类型）。
-- **为什么**：爆炸半径最大，必须在授权实验环境、有快照、且由操作员自备驱动；`ppl_kill` 的选路与清场是它的直接阻塞项。**其中"驱动体系"是零外部材料依赖的纯代码项，可以先动手，不必等 VM。**
-- **验收口径**：放入 `rw` 档驱动后 `ppl_kill` 打印命中的 EPROCESS 与 Protection 原值/新值；`kill` 档能杀普通杀软进程；manifest 哈希不符的驱动加载时 400 拒绝；L2/L3/L4 各留一条真机执行记录（或明确"不做"的定论）；面板"破坏性动作成功下发"分支实测。
-- **需要你（操作员）提供什么**：**授权实验 VM + 快照**；**操作员自备的 `rw` / `kill` 档 `.sys`**（项目不内置任何驱动）。
-
-#### 6. S3 动态免杀批次 2
-
-- **做什么**：C2 地址/sessionID/关键配置改成 `[]byte` 存取以纳入 sleep mask（真实工作量在 `string`→`[]byte` 重构，且掩码只能覆盖空闲窗口）；启动期 **ntdll 脱钩 + ETW patch**（AMSI patch 对 Go 默认载荷收益≈0，只在进程内加载 .NET/脚本时才有意义）；单稳加固。
-- **为什么**：批次 1（sleep mask / 去 RWX / apihash）已实现但**运行期零实测**；批次 2 在没有放行环境时做，产出又只是未验证代码。
-- **验收口径**：把 `docs/EVASION.md` §3.1 的流程脚本化（记录 360 拦截记录 + Defender 1116/1117 + 是否上线），每项改动按"一次只改一个变量 + ≥3 次重复 + 记录拦截原文"验收；休眠窗口内在 Process Hacker / x64dbg 里搜不到明文结果缓存与 SM4 子密钥特征。
-- **需要你（操作员）提供什么**：同第 4 项（放行环境 / 目标机）。
-
-#### 7. S4 / P2 工具库与远程加载
-
-- **做什么**：`data/tools/<os>/<arch>/` + 同级 `manifest.json`（用途/平台/调用示例/来源/SHA-256/许可/体积/最后校验时间）；只预置自研脚本型工具，第三方走"按需下载 + sha256 校验 + 版本轮换"；`remote_download` 拉到服务端再分发到会话；内网探测/横向/凭据利用/规避载荷全部远程加载。
-- **为什么**：无破坏性、无外部材料依赖，可与其他项并行；直接兑现"植入端体积与功能面不随能力增长"。
-- **验收口径**：植入端二进制体积/功能面不随上述能力增长；「下载→校验→内存加载→执行→回传→清理」闭环可跑通；工具元数据缺失或 sha256 不符时**明确拒绝执行**。
-- **需要你（操作员）提供什么**：第三方二进制的下载源与哈希清单策略（预置只放自研脚本）。
-
-#### 8. S5 首个冷门通道
-
-- **做什么**：DNS / DoH / DoT 优先（QUIC / HTTP2 备选，`internal/common/tunnel/quic/` 有可复用骨架），端到端跑通**一条**；新协议必须按 tag 编译，默认只带 1~2 个通道。
-- **为什么**：加一个新协议 = **12 类落点 / 20+ 处编辑**，其中 8 处"漏改就静默降级或编译失败"，必须单独排一轮；先跑通一条再谈多通道热切换与自动降级状态机。
-- **验收口径**：新通道端到端可用（真实服务端 + 模拟植入端脚本联调）；镜像一致性、tag 编译矩阵、特征裁剪核对全绿。
-- **需要你（操作员）提供什么**：若走 DoH/DoT：**域名与委派运维**；企业出口放行情况。
-
-#### 9. S6 屏幕流 / 截图跨平台（P0-3）
-
-- **做什么**：Linux 用 **X11 (`XGetImage`)** 起步（Wayland 走 PipeWire + portal 授权作为后续）；macOS 用 **ScreenCaptureKit**（屏幕录制权限提示与授权路径）；screenshot 同步补全；Windows 换 **Desktop Duplication API** 做增量帧捕获（保留 GDI 回退）。
-- **为什么**：这三项都**必须在真机验证**（无桌面/授权/GPU 条件写不出来），所以排在材料阻塞类的最后。
-- **验收口径**：Linux amd64 能出图；Win10/11 桌面会话 ≥5fps 且 CPU 占用可控；Server 无桌面返回明确错误。
-- **需要你（操作员）提供什么**：**Linux 桌面机（X11）**；**macOS + 屏幕录制授权**；Win10+ 带 GPU 的目标机。
-
-#### 10. 工程收尾 / 服务端在线更新（P3）
-
-- **做什么**：`scripts/e2e_smoke.ps1` 接进 CI（tag 前，零依赖可先做）；多通道语义对齐（TCP 最完整）；配置热更新边界文档化；前端任务列表虚拟滚动 + Sessions/仪表盘 WS 事件统一订阅；运行指标（帧限速丢弃数、广播去抖抑制次数）上界面；服务端自更新：先做**服务化守护**（Windows 服务 / systemd / 计划任务）→ 下载 → sha256（可选 Authenticode）校验 → **原子替换**（`MoveFileEx` / `rename`）→ 重启 → 自检 → 失败保持现有二进制 + sqlite 备份回滚 → 可信源白名单 + 独立密钥 + 默认关闭。
-- **为什么**：前 9 项之间可穿插；自更新**必须**先有服务化守护，否则"更新完自动重启"无从谈起；更新通道 = 完整 C2 控制端，被劫持等于 C2 被接管，所以默认关闭。
-- **验收口径**：CI 在 tag 前跑通 e2e；升版流程"检查 → 校验 → 替换 → 重启 → 自检"在测试环境完成，植入端自动重连、配置与 sqlite 数据不受影响；断网/摘要不符/签名不符时**明确失败且不改动现有二进制**；保留上一版二进制可一键回滚。
-- **需要你（操作员）提供什么**：自更新需要**可信更新源**（自建源 / GitHub Release）与**更新密钥**决策。
-
-> **口径（继续生效）**：在第 4 项完成之前，本文件与 CHANGELOG **不得新增任何"免杀已生效 / 能过某杀软"的表述** —— 本轮免杀改动目前只有静态与结构级证据。
-
-### 阶段详情（S1~S6）
-
-> 每个阶段**先列「✅ 已完成」，再列「❌ 未完成 / 待做」，最后单列「🚫 已定论不做」**（S6 的 P0-2 从"卡在本地 stash"捡回后为 **🟡 部分完成**，与总览表同口径）；同一件事只出现在一处，口径与上面的状态总览一致。
-
-#### S1 开放 MCP 服务接口 + 公共执行基础设施
-
-**✅ 已完成**
-- **工具元数据单源化**：新增 `internal/server/mcp`（`registry.go` 类型与 JSON Schema 生成、`registry_tools.go` **38 个工具**的类型化参数与风险分级 read 13 / confirm 14 / danger 11）；REST `/api/v1/mcp/tools`、内置 AI 的 function schema、对外 MCP `tools/list` **三处同源**；删掉 `handlers_mcp.go` 里 190 行工具清单与 `copilot.go` 里 33 条硬编码 schema。
-- **统一结果信封 + 大结果外置**（`envelope.go` / `resultstore.go`）：`{status,data,error,meta}`，超限结果落盘 `data/mcp-results/<日期>/<hex>` 并由 `result_read` 分页回读；**截断一律显式标注**；句柄做白名单 + `Abs`/`EvalSymlinks` 双校验防穿越。
-- **MCP 协议层**：`initialize` / `notifications/initialized` / `ping` / `tools/list` / `tools/call` / `resources/list` / `resources/read`；`Mcp-Session-Id` 会话、`DELETE` 结束、`GET` SSE；stdio 桥 `cmd/toshell-mcp`。
-- **安全边界**：独立回环监听（默认 `127.0.0.1:18082`）、MCP 专用 token（常量时间比较，不复用管理 API Key）、CIDR/Origin 校验、三档分级默认只放行只读、审批门扩展点（`ConsentGate`，真正的审批接线在 S2）、RPM/并发/挂起句柄三道闸、JSONL 审计（参数只记摘要、敏感键全脱敏）、fail-closed。
-- **兼修两个既有缺陷**：`delegate` 绕过审批（`isRiskyTool` 原为"允许列表 + fail-open"）、`plugin_upload`/`fileless_exec` 的路径穿越。
-- **验收证据**：`go build ./...` / `go vet` 通过；`go test ./internal/server/mcp/...` ok；`scripts/mcp_smoke.ps1` **18/18**（无 token/错 token 401、会话头 400、tools/list=38、只读可调用、危险默认 403、未注册 403、路径穿越 403、超 RPM 429、设置页 GET/PUT 与工具名校验）；`npm run build` 通过。
-
-**❌ 未完成 / 待做**
-- 无（S1 范围内没有剩余项；对外审批接线的最后一段已在 S2 完成）。
-
-**🚫 已定论不做**
-- 无。
-
-#### S2 内置 Agent：长任务可靠性
-
-**✅ 已完成**
-- **异步任务状态机**：`task.Manager` 增加终结通知原语（`Subscribe`/`WaitSettled`，注册与状态判定同锁防丢通知、等待者摘除不泄漏），`pushAndAwait`/`task_wait`/`execAndAwait`/剧本 `waitForTask` 全部改为**事件驱动等待**（不再 sleep 轮询，对外契约逐字段不变）；预估超时 ≥ `ai.long_task_threshold_sec`（默认 150s）的工具改为「提交 → `awaiting_task` 挂起并落库 `waiting_on` → **释放并发槽位** → 完成通知唤醒 → 结果接回 → 重入循环」；启动时对账 `agent_runs` 与 `tasks`（已完成→接回、仍在跑→重新订阅、丢失→明确终态 `task_lost`），顺带修掉"重启前下发的任务结果永远丢失"。收益有专门用例（并发上限 1 时挂起后槽位可再获取）。
-- **状态落盘**：4 张表（`agent_runs`/`agent_steps`/`agent_tool_calls`/`tool_results`，见 `internal/server/database/agent_schema.go`）+ 专用存储层 `internal/server/agentstore`（run 状态机推进、step 恢复游标、tool_call 幂等 upsert、result TTL 清理、同参重复计数）；全部 `IF NOT EXISTS`，对既有库幂等。顺带 `SeedTaskCounter(MAX(tasks.id))` 修掉进程重启后任务 id 撞号。
-- **长结果外置 + 句柄内联 + 分页回读**（设计见 `docs/AGENT-RESULT-OFFLOAD.md`）：唯一转换点 `mcp.InlineForModel`（≤8 KiB 原文；超限只给"摘要 + 句柄 + 显式截断说明"的合法 JSON 信封）；`result_read` 从"只在注册表里"补成真实现并加入 Agent 工具面（slice/tail + 游标，页大小自适应收缩）；删掉 8 处字符串硬截断，顺带修掉"截图 base64 被切成非法 JSON"与"integer 工具参数被静默丢弃"。
-- **上下文分层与 token 预算**：常驻 / 任务 / 工作（默认最近 14 条原文）/ 历史（更早折叠）四层装配抽成纯函数（`ai/context.go`），同步与异步共用；**常驻层逐字节稳定**（每轮都变的在线会话清单从 system 移到任务层，按 run + 5 分钟 TTL 缓存，顺带消掉 `currentSessions()` 内部那次未审计的 `session_list`）；折叠摘要保留真实工具名 + 外置句柄 + 截断标注且不拆散 `tool_calls`/`tool` 配对；两道 token 预算（`ai.max_context_tokens=32000` / `ai.max_run_tokens=400000`）+ `ai.context_working_keep=14`，字符近似估算 + **解析 `usage` 回填校准** + 30% 余量，超预算**先压缩后停止**（`stop_reason=max_tokens`）。
-- **控制循环三处硬上限 + 防死循环**：`ai.max_turns=20`（统一）、`ai.max_tool_calls=40`、`ai.max_wallclock_sec=900`，触发即停并记 `stop_reason`；同工具同参数签名第 2 次提示换策略、第 3 次判 `loop_detected`（只读工具豁免）。判定逻辑为纯函数（`shouldStopRun`/`loopSignature`），有单测。
-- **审批分级**：`ai.consent_policy: graded|all|off`（旧值 `auto→off`、`normal→graded` 兼容），按注册表 read/confirm/danger 分级，未注册工具按 danger、`delegate` 恒危险；设置页可改，接口回传的是**生效策略**。
-- **可观测性**：trace id 全链路（run/事件/日志/工具调用/**HTTP 响应**，`DoneInfo` 带 `stop_reason`）；**SSE `id:`/`Last-Event-ID` 断点续传**（每个 run 事件带 run 内单调递增 `seq`，重连带 `Last-Event-ID` 头或 `?last_event_id=` 恰好补齐缺口后无缝转实时；控制帧不带 id；`retry:` 提示 + 15s 心跳注释帧；`resync` 显式告知两类缺口 —— `events_expired`（缓冲淘汰，512 条/2 MiB）与 `events_dropped`（事件通道满），提示客户端改用 run 详情兜底；交接采用"先订阅通道、再取快照 + `seq ≤ lastSent` 去重"，有并发竞态用例断言 seq 连续无重复）。前端已接入续传并在缺口时显式提示、立即重取 run 详情，切走后不再重连。
-- **验收证据**：离线黄金集 `internal/server/ai/testdata/golden/cases.json`（**12 例**：纯问答 / 工具往返 / 防死循环（含只读豁免）/ 轮次·工具数·token 三种预算 / 分级审批挂起（含 `delegate` 与未注册工具 fail-closed）/ 大结果外置与句柄回读 / 历史折叠保真）+ 桩 LLM 与假执行器（不联网、无需真实模型与植入端），`scripts/eval.ps1` 一键跑并随 `./internal/server/ai/...` 进 CI；另有一条**全局不变量**：任何一次发往上游的消息里 `tool` 回执都必须能配到 `assistant.tool_calls`。`go test ./...` 全绿（13 个包）；`scripts/e2e_smoke.ps1` **19 项 0 失败**。
-
-**❌ 未完成 / 待做**
-- **本轮新发现的两个缺陷**（详细验收见「后续优化清单」第 1、2 项）：① 前端把 run 的跨轮累积时间线当"本轮步骤"重画、且每轮 SSE 水位线从 0 起（表现为界面"看起来又重复执行了一遍"，不影响模型输入）；② 同一条 assistant 消息里的第二个并行 `tool_calls` 被静默跳过（既没执行也没记录）。
-- **评估门禁的在线部分**（计划 M5，原计划标为可选）：`/agent/metrics` 指标、Dashboard 卡片与前端状态条。
-- `tasks.output` 仍被截到 **500 字节**，限制重启恢复的结果长度（已在给模型的说明里标注）。
-- 挂起会重置 `max_wallclock`/`max_turns` 预算（应接入 `agent_runs` 用量字段）；token 预算用量也尚未纳入 `agent_runs` 的持久化统计（跨挂起/重启累计）。
-- `ai.long_task_threshold_sec` 只走 YAML，未进设置页 PUT 白名单。
-- 本机 `CGO_ENABLED=0`，`go test -race` 在 windows/386 不可用（现用并发顺序用例替代）。
-
-**🚫 已定论不做**
-- 无。
-
-#### S3 免杀：分层治理（先解决"起不来"，再谈"藏得深"）
-
-**✅ 已完成**
-- **先定性的关键事实（元项的一部分）**：本机（360 + 电脑管家 + 无边界安全系统）实测证明**未签名 PE 在进程创建阶段就被拒**（连 Hello-World Go 都被拒、微软签名程序正常）→ 拦截在**签名/信誉层**，**改载荷字节无效**。该结论与证据写进 `docs/EVASION.md`（含"一次只改一个变量 + ≥3 次重复 + 记录拦截原文"的纪律），避免后续重复踩坑。
-- **签名顺序契约**：`finalize_order.go`（纯函数定序 + 构建日志 + 违规打 error + 表驱动单测），并确认 `sign_timestamp_url` 在 signtool（`/tr` + `/td sha256`）与 PowerShell（`-TimestampServer`）两条路径上都真的传到；**签名必须是最后一步**。
-- **静态降特征：字符串混淆盲区与 DLL 路径补齐**（修掉三处**实测到的**漏点）—— ① exe 与 dll 各残留 1 次 `go1.20.14`（`runtime.buildVersion` 落在锚定窗口之外 → 新增全文件版擦除，长度不变）；② 混淆器只认"简单双引号字面量"，含转义的 Windows 路径/设备名与**全部反引号原始字符串**（注册表键、脚本模板）都被放行 → 现已覆盖（struct tag 与 const 行保留）；③ **DLL 路径此前根本没做字符串混淆与每构建随机化**（实测明文高信号 API 名 11 处、`http://` 2 处、ETW 4 处）→ 补齐后与 exe 同水平。代价：产物 **+0.3%（exe）/ +2.8%（dll）**。
-- **PE 版本资源 / 图标 / 公司信息 / 时间戳（第二批）**：`builder/patch_resources.go`（纯标准库）写 `RT_VERSION` + `RT_ICON`/`RT_GROUP_ICON`，按 `StepResourcePatch` 插在指纹擦除之后、**UPX 与签名之前**（exe 的 `compile()` 与 dll 的 `compileLibrary()` 都接了）；**默认不注入**（实测 3,469,557 → 3,469,557 完全一致），开启后 exe / dll 各 **+2048 字节**；实测达成验收口径：`.rsrc` 出现、**Windows 原生 `VersionInfo` 读得出八个字段**、`ExtractAssociatedIcon` 取得到图标、`LoadLibraryEx(IMAGE_RESOURCE)` + 真机"打资源的 exe/dll 都能加载并回连"。
-- **一键中性预设 `resource_preset="neutral"`**：套用**自有品牌**外观（`ToShell Ops Toolkit` 公司名/产品名/描述/版权 + `toshell-agent.exe|dll` + `fixed` 时间戳），语义是"只填操作员没显式给的字段"，**不猜版本号**，预设名拼错**直接构建报错**。**明确不预置"像系统组件"的外观**（品牌冒充字符串不该由默认值写进公开仓库）。预设默认关闭，零值请求逐字节不变。
-- **节名 / 节熵口径 + `.symtab` 清理（第三批）**：`builder/pe_sections.go` 的 `NormalizePESections` 删掉 Go 链接器残留的非典型节 `.symtab`（COFF 时代节名，正常 Windows PE 没有），并把自相矛盾的 `PointerToSymbolTable`（实测非 0，如 3468800）/`NumberOfSymbols`（=0）置 0；**默认执行**，`section_normalize` 排在 `pe_resource_patch` **之前**。实测 `windows/386` exe **3,469,557 → 3,469,045（−512 B）**、`windows/amd64` **3,574,517 → 3,574,005（−512）**、节数 **6→5**，其余节与全部数据目录逐字段不变；`format=dll`（mingw）本来就没有 `.symtab` → no-op。节熵判定口径写进 `docs/EVASION.md` §2.3：看**"有没有接近 7.8 的节 / 有没有非标准节名"**，`.text` 6.08 / `.rdata` 5.68 / `.data` 5.60 是正常区间，**不要**当可疑去"优化"。
-- **修掉"用了资源预设的载荷无法运行"（用户实测抓到的回归）**：节规范化删掉 `.symtab` 后在 RVA 空间留下**一页没人映射的空洞**，一旦再追加 `.rsrc`，`LoadLibraryEx` 就以 `ERROR_BAD_EXE_FORMAT(193)` 拒绝整个镜像。修复：新增 `coverFreedSectionRVA()`，把被删节原本占用的虚拟区间**划给前一个节**（只扩大 `VirtualSize`，不动节数/文件长度/任何数据）。验证：386/amd64 × 无资源/预设/预设+图标**五份产物 `LoadLibraryEx` 5/5 LOADER OK**，带 `neutral` 预设的真实载荷进程存活并成功上线；新增 `TestNormalizeLeavesNoUnmappedRVAGap` 回归用例。教训写进 `docs/EVASION.md` §2.3：**"能通过静态体检"不等于"能被 loader 接受"**，改 PE 节布局的验收口径必须包含 Windows loader 接受 + 真实执行。
-- **验收证据**：`go test ./...` 全绿；`scripts/e2e_smoke.ps1` **19 项 0 失败**（真实构建 + 执行 + 上线 + `whoami` 回执）；`scripts/pe_footprint.ps1` 追加资源细节与 `PointerToSymbolTable`/非标准节名/最高节熵打印。
-
-**❌ 未完成 / 待做**
-- **两级验收环境与测试矩阵脚本至今未建立**（干净 VM（仅 Defender）+ 装 360 的目标机）→ 本节全部结论都只有**静态/结构级证据**（字节数、节表、loader 接受性、单测），**没有一条"目标机上不被拦"的运行期结论**。
-- **真实证书 / EV + 信任链落地**未做：本机无证书，只有顺序契约与单测保证签名顺序；**签名后的真实复核**同理未做。
-- **白加黑 / 不落 PE 的加器链真机实测**未做（只有 8 条链的命令模板与降级建议）。
-- **判定矩阵**（"在哪一层被拦 → 该做哪一类改造"）尚未落成脚本。
-- C 植入端（mingw）未接入资源修补（现有资源/节规范化只对 Go 产物生效）。
-
-**🚫 已定论不做**
-- **更全的反沙箱反调试、间接系统调用与调用栈伪装、模块 stomp**：有实测依据表明带进程枚举的载荷在 360 机器上"一启动即被拒"，**净收益为负**，一律默认关闭、按需编译。
-
-#### S4 植入端体积分档与内存加载
-
-**✅ 已完成**
-- **能力位图（前置阻塞项）**：`/sessions/{id}/capabilities` 原来**只按 OS** 推导（用 `light` 档构建的载荷照样点亮注入/截图/凭据/EDR/BYOVD 面板，点下去只得到"未包含在精简构建中"）。现在新增 `internal/common/features` 作为**唯一一份纯函数**（档案/tag/OS → 能力集合 + `tabs` + `cap:v1:<hex>` 位图；未知档案 fail-closed 归入 light），构建期把位图烘进载荷（照旧走字符串混淆），植入端经**已有**的 `Modules` 字段随心跳上报（四条传输一致），服务端 `Resolve()` **上报优先、老载荷按 OS 兜底**并标 `source: reported|os_fallback` + `source_note`。**实测**：light 载荷 **11 项**能力 / tabs 只有 av·files·info·process·shell；full 载荷 **31 项**、注入/截图/凭据/EDR/BYOVD/插件按真实编译结果点亮。
-- **内存模块按需裁剪**：现有 `light` 档案已裁掉注入/EDR/凭据/BYOVD/截图/插件/中继（`!light` 构建约束，实测 full−light = **+575,488 B（约 575 KB）**，见下表 V6）。**如实边界**：粒度是"整档"—— `injection`/`edr`/`stomp`/`imgexec` 目前**不能各自独立开关 tag**；需要单模块级裁剪时走 `exec_module` 按需加载（下方）。
-- **`exec_module` 契约与 ABI**：新增 `internal/common/moduleabi`（ABI v1 + C 头 `builder/implant_c/module/tsh_module.h`，三份副本由单测钉住）+ `internal/server/modules`（清单 / sha256 硬拦 / 一次性 token）+ 接口 `POST|GET /api/v1/sessions/{id}/module` + 二进制帧 `TypeModuleData(0x0E)`。模块**只接受原生 C PE**（Go/CLR/TLS 目录硬拒 —— 反射映射宿主里跑 Go 模块会出两个 runtime），`tsh_module_main(ctx*)` 拿得到参数与返回值（ctx 只用 ≤4 字节标量，386 用 `__stdcall`）。9 步校验链全部返回机器可读 code + 中文文案：会话 active / 已登记 / **sha256 与大小硬拦** / 架构与 PE 实际位宽一致 / ABI 导出存在（新增 `builder.ExportedNames`）/ 三层版本握手 / token（绑定 session+module+sha256+size+abi、TTL 120s、用后即废）/ 下发 fail-closed / 审计。能力位只追加第 32 位、**不加空面板**，默认载荷零行为变化（无 tag 时 +512 B，给出"未包含在本次构建中"的明确错误而非 `Unknown task type`）。
-- **`exec_module` 实测**（windows/386，同参数）：light/tcp 2,946,805 → light+execmodule 2,973,941（门控 **+27,136**）；示例模块 `cred_probe`（C + `-nostdlib`）**7,680 字节**，把 `credentials` 搬成模块可省 **67,584**。判读：`exec_module` 买到的是"最小载荷 + 按需全功能 + 模块可服务端更新"，**不是**体积数量级下降 —— 真正的数量级在传输栈。
-- **模板文件名/函数名中性化**：`exec_module_windows.go`/桩 → `xload_windows.go`/`xload_stub.go`，`handleXLoad`/`handleXData`；E2E 复测 pclntab 内模块相关残留 **1 处 → 0 处**。
-- **体积实测矩阵（V0~V7）**（windows/386，`-s -w -buildid= -H windowsgui -trimpath`，Go 1.20.14；按 1 MB = 10⁶ 字节计）：
-
-| 变体 | 字节 | 相对 light/tcp | 说明 |
-|---|---|---|---|
-| 空程序（地板） | 801,280 | — | **Go runtime 地板 0.80 MB** |
-| 空程序 + `net`+`json`+`fmt`+`os`+`time` | 2,010,624 | — | **核心标准库地板 2.01 MB**（已超 nano 目标 1.8 MB） |
-| V0 light / tcp | **2,946,805** | 基准 | 当前默认档 |
-| V1 light / tcp + `bof` | 2,946,805 | **0** | light 档本就排除 BOF，tag 无效果（与能力位图一致） |
-| V2 light / tcp + `evasionscan` | 2,953,973〔换算〕 | +7,168 | 杀软进程枚举 7 KB |
-| V3 light / **http** | 5,455,613 | **+2,508,808** | 引入 `net/http`+`crypto/tls` |
-| V4 light / **websocket** | 5,097,728 | +2,150,923 | 再叠 gorilla/websocket |
-| V5 light / **mqtt** | 5,399,798 | +2,452,993 | 再叠 MQTT 库 |
-| V6 full / tcp | 3,522,293 | **+575,488** | 全部 Windows 可选功能（注入/EDR/凭据/BYOVD/截图/插件/中继） |
-| V7 full / mqtt | 5,975,286〔换算〕 | +3,026,433 | 最重组合 |
-
-> **口径说明（2026-09-28 对齐）**：地板两行与 V0 / V3 / V4 / V5 / V6 是**发布版（v1.4.0）工作区**的逐档实测（与 [README.md](README.md)「植入端体积（v1.4.0 本机实测）」同源）；**V2 / V7 未随发布版重测**，其绝对值按"发布版基准 + 同一迭代早期实测增量"换算（V2 = light/tcp + 7,168；V7 = full/tcp + mqtt 增量 2,452,993），标〔换算〕，只作量级参考。本文 **S3 阶段详情**里的绝对字节数（3,469,557 / 3,469,045 / 3,574,517 / 3,574,005）同样是**早期迭代口径**，保留原因：它们只用于支撑"−512 B / 默认不注入时字节数完全一致"这类**相对**结论；绝对体积一律以本表与 README 为准。
-
-  判读：① 体积大头是**传输栈**（http/ws/mqtt 各 +2.1~2.5 MB），比所有功能 tag 加起来（+0.58 MB）还大一个量级；② light/tcp 的 2.95 MB 里 **2.01 MB 是核心标准库地板**，我们的代码只占约 0.94 MB；③ 所以 `light ≤2.4 MB` 只能靠 stdlib 瘦身，`nano ≤1.8 MB` 在 Go 里做不到。
-
-**❌ 未完成 / 待做**
-- **分档与目标体积**：nano / light / full 三档只实现了 light / full；**默认档仍是 `full`**（代码事实：`features.NormalizeProfile("")` → full、前端生成载荷页默认 `profile:'full'` —— 本文件旧版"默认档改为 `light`"的说法与代码不符，已更正）；**目标体积未达成**（light 实测 2.95 MB > 目标 2.4 MB；full 3.52 MB > 目标 3.2 MB）；每档的功能对账表与构建命令待补齐（前端按能力位图的提示已落地）。
-- **`exec_module` 的已知边界**：只真机测过 TCP 通道（HTTP/WS/MQTT 已接线并编译通过、未真机跑）；单帧下发上限 **4 MiB**（未做分块）；模块自身字符串是明文（只存操作员 `data/modules/`，按需下发、不落目标磁盘）；token 只在内存（服务端重启使在途 token 失效）；**未暴露给 MCP/Agent 工具面**（保守口径）。
-- **工具库与远程加载（P2）**：`data/tools/` 只有 `.gitkeep`，未开工（见「后续优化清单」第 7 项）。
-
-**🚫 已定论不做**
-- **传输栈瘦身与模块化**：实测 http/ws/mqtt 各 +2.1~2.5 MB（V3/V4/V5），比全部功能 tag 之和（+575 KB）大一个数量级 —— 但这部分是 `net/http` + `crypto/tls` 的成本、**不是可裁剪的冗余**：① 现有构建**已经**按通道 tag 只编一个传输（tcp 档不会带上 http/ws/mqtt 的字节，所以"模块化"并没有可回收的重复）；② 想省下这 2 MB 只能手写 TLS 客户端（不现实且不安全）或换 uTLS（只会更大）。结论：**保持现状**，把"要小就选 tcp 档"写进分档说明即可。
-- **`nano` 档（≤1.8 MB）**：核心标准库地板已 **2.01 MB**（见上表"空程序 + `net`+`json`+`fmt`+`os`+`time`"行），nano 只能走 **C 植入端**或手写收发层 / 精简 `fmt`+JSON。**已决定不排入 v1.4.0**（等于第二套植入端，工作量与维护成本都远超收益）；若后续确有"≤1.8 MB 且要跨平台"的硬需求，再单独立项。
-
-#### S5 新增低特征通道
-
-**✅ 已完成（第 0 步：不新增协议，只做路径/Host 收敛与中继对齐）**
-- **严格路径**：改造前 WS 对**任意路径**都升级（`GET /whatever` 也能拿到 `101`，普通 GET 也会回 `400` + `Sec-Websocket-Version: 13`，都等于宣布"这里有 WS 端点"）。新增 `listener.ws_path`（默认 `/`，**与现役植入端口径同源** = `transport.DefaultUpgradePath`），WS **只对一条路径**升级；变形路径（`//`、`/./`、尾部斜杠、`..`、百分号编码、大小写）与不完整握手一律回**普通 404**（与"该路径没有处理器"逐字节一致，绝不回 `Sec-Websocket-Version`）；顺带去掉 `ServeMux` 的 301 清洗。因默认路径未变，**无需新旧路径兼容窗口**（改 `ws_path` 必须同步改植入端 `server_url`）。
-- **Host 收敛 + 域前置**：新增 `listener.ws_host_allowlist`（**空 = 不检查**；非空时非名单 Host → 404）；植入端 WS 支持 `front_domain`（SNI + Host，与 HTTP 通道同一口径；gorilla 的 `Host` 键特判使 SNI/Host 不冲突）。
-- **中继对齐**：确认 WS/HTTP/MQTT 均不支持中继 → `POST /sessions/{id}/relay` 对非 TCP 通道回 **409** 明确报错、WS 监听器对中继帧记结构化告警（不再静默）、`ListRelayNodes` 与 HTTP 逐字一致。**没有**做半个中继。
-- **可观测**：被拒升级记结构化日志（reason/path/raw_path/host/remote_ip；**不记请求头与 query**，字段消毒 + 截断；按"是否像握手尝试"过滤噪声）。
-- **验收证据**：`go test ./...` 全绿（新增两组探测面单测：各类变形被拒且被拒响应与 `http.NotFoundHandler` 逐字段一致、Host 名单三种口径、日志消毒、中继能力判定）；`scripts/mcp_smoke.ps1` 18/18；真机 E2E（websocket 载荷上线 + `whoami` 回执、`curl --path-as-is` 探测与未知路径不可区分、错 Host 握手被拒）。
-
-**❌ 未完成 / 待做**
-- **第 0 步的延伸**：uTLS/JA3 指纹（WS 仍是 Go 标准库 TLS）、WS 拟态（非 C2 路径不反代伪装站，只回 404）、HTTP/2、**真实 CDN 域前置联调**（含 `wss` 真实证书链）；`ws_path` 目前是**全局配置**（所有 WS 监听器共用），未做 per-listener 覆盖。
-- **首个新通道（未开工）**：候选为 DNS/DoH/DoT 控制通道（穿透性最好、可零新库）、QUIC/HTTP3（服务端 `go.mod` 已依赖 quic-go，`internal/common/tunnel/quic/` 有可复用骨架）、HTTP/2（共用端口证书；现有 HTTP 通道很可能实为 h1.1）。**先端到端跑通一个**。
-- **组合与降级（未开工）**：控制面走低特征低速通道 + 数据面走高吞吐通道；多通道热切换与自动降级状态机。
-- **成本约束（实施前提）**：加一个新协议目前需要 **12 类落点 / 20+ 处编辑**，且有 8 处"漏改就静默降级或编译失败"；新协议必须**按 tag 编译**，默认只带 1~2 个，避免撑大体积。
-- **验收口径**：新通道端到端可用（真实服务端 + 模拟植入端脚本联调）；镜像一致性、tag 编译矩阵、特征裁剪核对全绿。
-
-**🚫 已定论不做**
-- 无（第 0 步明确"不改 TLS 指纹、不加任何新 tag、不动 `go.mod`"，但那是本步的范围界定，不是永久放弃）。
-
-#### S6 杀软对抗能力分级 + 工程收尾
-
-**✅ 已完成（第一批：AV-L0 侦察 / AV-L1 温和）**
-- 分级真源 `internal/common/avops`（等级 + 动作表 + 策略，纯逻辑表驱动，未知动作/未知等级 fail-closed）；**8 个既有动作全部登记**（`av_detect` L0；`edr_blind` L1；`edr_kill`/`process_kill` L2；`byovd_load`/`byovd_unload`/`byovd_kill`/`ppl_kill` L3），逐条核对过植入端 `executeTask` 的任务类型与能力位。
-- 聚合入口 `GET /api/v1/av-ops`（等级目录 + 配置是否允许 + 原因）、`GET /api/v1/sessions/{id}/av-ops`（逐动作 `allowed` + `reasons[]`，**排障先看这里**）、`POST /api/v1/sessions/{id}/av-ops`（服务端按动作定级 + 七步前置检查 + 复用既有 `task.Manager`/`TaskPusher` 下发 + 结构化审计 + `impact{}` 影响评估）。**既有 6 条链的路由与语义一行未改**。
-- 配置 `avops.allow_l2/allow_l3/allow_l4` 默认 **false**（fail-closed 落点）、`require_confirm` 默认 true（`*bool`：零值也按"更严"处理）、显式超时 120/600（超上限拒绝，服务端看门狗把超时置为 `timeout` 终态）。
-- **破坏性任务禁止自动重试**：堵住 `ListReplayable`（重连补发）与 `RequeueSent`（HTTP 轮询重投递）两条服务端自动路径，并按任务类型判定（落 sqlite、重启后仍有效）；被拒任务**保持 `sent` 不改终态**（我们并不知道植入端有没有执行过）。
-- **Agent/MCP 侧只暴露 L0**：工具面**未新增任何工具**（注册表仍 38 个），用注册表扫描 + 源码扫描两条守卫测试钉住"L1+ 动作不可能经工具面触达"。
-- **前端二次确认 UI**：会话详情新增「对抗分级」面板（`web/src/components/AVOpsPanel.tsx` + `.css`）—— 策略/驱动档位回显、按等级分组、逐动作 `reasons[]` 中文原因、破坏性动作二次确认弹层（服务端 `impact` 原文 + 目标预览 + "不会自动重投递/不可回滚"）、超上限超时前端拦住、L4 显示"暂无落地动作"且按钮数 0。真机核对出并处理了一个语义坑：**L1 的 `allowed:false` 只带 `confirmation_required`（= 必须带 confirm），按 `!allowed` 禁用会让 L1+ 永远点不了** —— 面板区分"硬阻塞"与"需确认"。
-- **验收证据**：`go test ./...` **18 个包全绿**（新增 avops 表驱动、handler、任务重投递、驱动档位、MCP 扫描守卫用例）；真机 E2E 验证了默认开关（L0/L1 开、L2/L4 关）、逐动作 `allowed/reasons`、**L0 `av_detect` 真实下发回传**、缺 confirm→409 / tier 不符→400 / 未知动作→400 / L2→403 / L3 无驱动→409 / 超上限→400、被拒动作**没有产生任何任务**、审计 `avops_dispatched`/`avops_rejected` 齐备。
-
-**❌ 未完成 / 待做**
-- **L2/L3/L4 真实执行未验证**（默认关闭，需目标机 + 操作员自备驱动）：真机 E2E 只验证了"**被拒**"与 L0 的真实下发回传，**没有**真的在测试主机上执行过任何破坏性动作；面板侧"破坏性动作成功下发"的分支同样未实测（真机只点到"弹出确认层后取消"）。
-- **L4 没有任何落地动作**（`implemented:false`、`action_count:0`）：植入端目前没有独立的 AMSI/ETW 抑制任务类型，`allow_l4=true` 也不会让任何动作变成可下发 —— 不造"点了没反应"的假入口。
-- **协议层重投递仍可再执行**：植入端每次新建连接都会 `clearResultCache()`，"同一个 task ID 再送一次就一定会再执行"在**协议层仍然成立**；目前只有"服务端不自动重发"这一层保证。
-- **驱动体系三项均未开工**：`purpose`(kill/rw/both) 真正驱动选路、进程重启后残留驱动服务清场、catalog 签名驱动支持。
-- **屏幕流/截图跨平台（P0-3）未开工**：Linux(X11) / macOS(ScreenCaptureKit) + Windows DXGI 增量捕获（需真机验证，因此排在最后）。
-- **工程收尾（P3）未开工**：e2e 冒烟接进 CI（tag 前）、多通道语义对齐、配置热更新边界文档化、前端任务列表虚拟滚动与 WS 事件统一订阅、可观测性指标暴露到界面、**服务端在线更新（自更新）**（先做服务化守护 → 原子替换 → sha256/签名校验与防降级 → sqlite 备份与回滚 → 可信源白名单，默认关闭）。
-
-**🟡 部分完成（P0-2 内存执行加固 + 「配置热重载报错可见」：本轮从 `git stash@{0}` 捡回并补完）**
-- **解决什么**：`fileless-exec` 的 `exe_mem`/`dll` 把 PE **反射映射进植入端自己的进程**，被执行的程序收尾调 `ExitProcess`/`RtlExitUserProcess` 会连宿主一起结束 —— **会话永久掉线**（服务端只看到"目标机掉线了"）、任务永远停在 `sent`。现在在 **IAT 层**（被映射镜像自身 + 已加载模块两层，后者才覆盖 `msvcrt`/`ucrtbase` 这类 CRT 自己的 IAT —— "main 返回"这条最常见的收尾路径走的正是它们）把退出类调用改写为**原生机器码桩**：只 `ExitThread(退出码)` 并记录退出码/命中来源，**宿主存活**；stdout/stderr 在 `WriteFile`/`WriteConsoleA|W` 按 std 句柄截流回传。**宿主自身收尾结构性不受影响**：层 2 显式跳过 `ntdll`/`kernel32`/`kernelbase` 与宿主主镜像，宿主走的是 `os.Exit`/`exit` 任务/自杀路径，一个字节没动。同 stash 的**「配置热重载报错可见」**一并落地：`config.Reload()` 先 `ReadInConfig` 再 `Apply`，失败打 error 级日志 + 原始错误 + "继续使用旧配置"，结果经 `/health`（未认证：只给 ok/时间/失败计数，不泄露路径与解析细节）与 `/settings`（已认证：给完整原文）回传。
-- **实测证据（windows/386 植入端 + mingw 32 位原生 `exit7.exe`，TCP 全链路真机跑通；载荷由服务端 `fileless-exec` 以 `kind=exe_mem` 下发）**：
-  - 改前（HEAD 模板，`TOSHELL_IMPLANT_TEMPLATE_DIR` 指向 `git worktree` 出的 `.tmp-verify/pre-p02`）：载荷执行**当秒**服务端记 `Connection cleared` → `判定离线，15s 后广播` → `广播 session_offline`；植入端进程消失，任务停在 `sent`（第 2 次下发 500）。**直接调 `ExitProcess` 与 CRT 收尾两条路径都是这个结果** —— 旧实现的重定向目标取自 `resolveAPI`，而本机 `kernel32!ExitThread` 是**转发导出**（`NTDLL.RtlExitUserThread`），旧 `getProcAddr` 把"转发字符串的 RVA"当函数地址返回，重定向实际指向数据，反而把宿主打死（本轮已在 `apihash_windows.go` 修掉：转发项一律返回 0 交给 `GetProcAddress`）。
-  - 改后（当前工作区模板）：30s 内 **15 次采样全程 `active`**，植入端进程存活；任务 `exit_code=7`，结果里明确写出 `加固已生效：退出拦截+输出捕获（镜像 IAT N 处 / 已加载模块(CRT 等) IAT 23 处）`、`[退出拦截] 载荷调用 kernel32!ExitProcess(7) 已被改写为 ExitThread：只结束载荷线程，宿主植入端**未退出**`、`--- 载荷 stdout (15 字节) --- HELLO_MEMEXEC`；随后 `whoami` 回执 `desktop-sfkhr1b\123`（exit_code 0）；**连续两次 `exe_mem` 都成功**（第二次 IAT 命中 0 处 = 幂等，加固仍在）；`exit` 任务仍能自杀（`status=completed`、`output=implant exit acknowledged`）—— **宿主正常退出路径未被这次拦截逻辑破坏**。
-  - 配置侧：把配置写坏后热重载 → `2026/09/28 16:01:15 [ERROR] [config] 配置文件重载失败：While parsing config: yaml: line 6: did not find expected key（**继续使用旧配置**，本次改动未生效）`，`GET /settings` 回传同一原文、`GET /health` 回 `ok:false failures:2`；恢复成合法 YAML → `[INFO] [config] 配置文件已重新加载并生效` + `[INFO] [server] 配置变更已应用（热重载成功）`。
-- **剩余什么 / 明确不覆盖（如实）**：① 载荷运行时用 `GetProcAddress`/`LdrGetProcedureAddress` 解析出 `ExitProcess`/`RtlExitUserProcess` 再**裸调**，或把退出调用**静态链入/内联**进自身代码 —— 不经过任何被改的 IAT，**拦不到**；② `TerminateProcess(<本进程的真实句柄>)` / `NtTerminateProcess(<真实句柄>)` **放行**（原生桩只能比较常量伪句柄 `GetCurrentProcess() == -1`）；③ `WriteFileEx`/`NtWriteFile`/自己 `CreateFile("CONOUT$")` 再写的输出**不捕获**，并且**宿主自身没有有效 std 句柄时（无控制台方式启动）同样捕获不到** —— 这两类情况结果里会写明"未捕获到任何内容（可能原因…）"而不是静默给空串（本轮实测：WMI 直起、植入端无控制台 → 捕获为空；用 `cmd /c … > log` 给了真实 stdout 后正常拿到 `HELLO_MEMEXEC`）；④ 原计划的 **inline hook 双保险未做** —— 只做了 IAT 层（inline hook 需搬运被覆盖函数序言，失败模式是"被 hook 的 API 全进程变砖"，对宿主可用性的风险大于收益）；⑤ `dll` 路径是在**宿主线程**上同步执行被映射代码，若该 DLL 调 `ExitProcess`，改写后的 `ExitThread` 结束的是宿主自己的线程，这条分支**未做真机验证**（`blob_windows.go` 里"判定走栈上镜像帧"的注释与实现不符，实现在 `mexecguard_windows.go`，属文档待修）；⑥ 真机结论只在 **TCP 通道 + windows/386** 上取得，HTTP/WS/MQTT 与 amd64 未跑。
-
-**🚫 已定论不做**
-- 无（本阶段没有"定论不做"项；"不造 L4 假入口"是显式取舍，见上面的待做）。
-
-**验收口径（S6 收尾）**
-- AV-L0/L1 在授权实验 VM 上通过最小可验证集；L2/L3/L4 留真机执行记录或明确结论；`exe_mem` 跑原生工具后植入端**不掉线**；CI 在 tag 前跑通 e2e；自更新在测试环境完成"检查→校验→替换→重启→自检"且失败不改动现有二进制。
-
----
-
-## 附 A：历史条目池（P0~P3：背景、根因与验收口径）
-
-> 本节是 v1.4.0 之前编写的条目池：**背景、根因与验收口径仍然有效**，但**状态与顺序的唯一口径是上方「v1.4.0 状态总览」与「后续优化清单」** —— 本节不再单独判状态、也不重复列"待做"清单。
-
-### P0-1 驱动体系：操作员自备 + 多档能力 + 加载前自检
-
-- **已达成的部分**：v1.3.4 完成**加载前自检**（`internal/server/drivers/verify*.go`）—— manifest `sha256` 一致性不一致直接拒绝下发；Authenticode 用 `WinVerifyTrust` 判签名与篡改、尽力取签名者；易受攻击驱动黑名单只读本机策略与名单文件、给出"1275 静默拒绝"提示；`GET /api/v1/drivers/{name}/verify`，前端驱动按钮直接标出"哈希不符/未签名"并展示警告。
-- **现状**：不再内置任何驱动（v1.3.3 起），`ppl_kill` 只能走句柄窃取，**PPL 保护进程（Defender MsMpEng 等）清不掉** —— 因为没有具备内核读写的 `rw` 档驱动。目录签名（catalog）的 `.sys` 取不到签名者，只给"签名有效/未签名"结论（不伪造结论）。
-- **未做**：见「后续优化清单」第 5 项。
-- **验收口径**：放入 `rw` 档驱动后 `ppl_kill` 能打印命中的 EPROCESS 与 Protection 原值/新值；`kill` 档驱动能杀普通杀软进程；manifest 哈希不符的驱动在加载时被 400 拒绝。
-- **需要操作员提供**：授权实验 VM + 快照；操作员自备的 `rw` / `kill` 档 `.sys`。
-
-### P0-2 内存执行加固（`exe_mem` 的可用边界收窄）
-
-- **已达成的部分**：v1.3.4 **下发前 PE 预检**（`internal/server/builder/pecheck.go` + `handlers_fileless.go`）—— 手写解析 PE 头（架构/DLL/TLS/CLR/重定位）+ Go 载荷识别（`.gopclntab`、`\xff Go buildinf:`），`exe_mem`/`dll` 命中硬边界直接 400 拒绝并给出 `reasons`/`suggestion`/`pe_info`，`warn` 类照常下发但回传 warnings，`force:true` 可强制（留痕）；前端展示原因并支持强制下发。
-- **现状**：`ExitProcess`/`RtlExitUserProcess` 的 IAT 层拦截 + stdout/stderr 捕获**已从 `git stash@{0}` 捡回并补完、真机验收通过**（改前载荷执行即掉线，改后 30s 全程在线 + 退出码/stdout 回传 + `whoami` 回执）；同 stash 的「配置热重载报错可见」一并验收。**剩余**：运行时解析地址后裸调/静态链入的退出调用拦不到、`TerminateProcess(自身真实句柄)` 放行、`WriteFileEx`/`NtWriteFile` 输出不捕获、inline hook 双保险未做、`dll` 路径未真机验证（详见 S6 阶段详情的 P0-2 段）。
-- **未做**：见「后续优化清单」第 3 项（该项已完成，保留编号以免打断交叉引用）与 S6 阶段详情的 P0-2「剩余什么」。
-- **验收口径**：`attrib.exe`/`cmd.exe` 这类原生工具在 `exe_mem` 下执行完，植入体**不掉线**；带输出的工具能拿到返回内容；Go 载荷被明确拒绝（已达成）。**前两项已用"会调 `ExitProcess` 的 32 位原生 exe"在真机上验收通过**（真实 `attrib.exe`/`cmd.exe` 未单独跑）。
-- **需要操作员提供**：无（决策与真机验收本轮已闭环）；amd64 载荷与 HTTP/WS/MQTT 通道的复测仍可另做。
-
-### P0-3 屏幕流 / 截图：跨平台 + 增量捕获
-
-- **现状**：只有 Windows 实现（GDI BitBlt + PrintWindow 回退，参数化后帧率上限由带宽而非采集能力决定）；Linux/macOS 全是 stub（`screen_stream_unix.go`）。
-- **为什么没做**：三项都**必须在真机**（Linux 桌面 / macOS 授权 / Win10+ GPU）验证；本机连新生成的载荷都无法执行，写了只能交付未验证代码。
-- **未做**：见「后续优化清单」第 9 项（Linux X11 起步，Wayland 走 PipeWire + portal 作为后续；macOS ScreenCaptureKit；Windows Desktop Duplication API，保留 GDI 回退）。
-- **验收口径**：Linux amd64 能出图；Win10/11 桌面会话 ≥5fps 且 CPU 占用可控；Server 无桌面返回明确错误。
-- **需要操作员提供**：Linux 桌面机（X11）；macOS + 屏幕录制授权；Win10+ 带 GPU 的目标机。
-
-### P0-4 发版门禁：一条命令的端到端冒烟
-
-- **已达成的部分**：`scripts/e2e_smoke.ps1`（临时服务端 + 鉴权/关键路由校验 + windows full/light + linux 三档载荷构建 + 可选真植入端上线与任务下发 + ✅/⚠️/❌ 摘要，有 ❌ 即非 0 退出；实测 **19 项 0 失败**）；CI 侧 tag 与 `toserver -version` 一致性校验、zip 内容清单校验、`checksums.txt`（本地 `scripts/package_release.ps1` 同步生成）。
-- **未做**：见「后续优化清单」第 10 项（把脚本接进 CI 的 tag 前 workflow；本地"发布包内 `toserver -version` == tag"校验 —— CI 已有）。
-- **验收口径**：CI 在 tag 前跑该脚本；本地 `powershell -File scripts/e2e_smoke.ps1` 一条命令可复现。
-- **需要操作员提供**：无。
-
-### P0-5 动态（行为）查杀：先解决"起不来"，再谈"藏得深"
-
-- **现状（本机实测）**：装有 360 安全卫士 + 腾讯电脑管家 + 无边界安全系统的主机上，**任何新生成/未签名的 PE 一执行就被拒并删文件**：一个只有 `time.Sleep` 的 Hello-World Go 程序同样被拒（`Access is denied` + 文件被删除），对照 MS 签名的 `notepad.exe` 副本可正常执行。所以本机看到的"动态被查杀"**判别不出载荷特征**（拦截依据是"未签名/未知 PE + 主动防御策略"）；Defender 日志里唯一的 C2 类记录是历史样本的 `Behavior:Win32/CommandAndControl.A!ml`（行为判定，非本项目）。
-- **已做**：见顶部「当前版本状态」（代码签名 / 8 条加载器链 / 真 DLL 载荷 / BOF 按需编译 / Go 构建期指纹擦除 / sleep mask / 去 RWX / `docs/EVASION.md`）与 S3 阶段详情（静态降特征三批 + 布局回归修复）。内存模块按需裁剪（`light` 整档）与 PE 资源/节名口径**已完成**，不再列在待做。
-- **未做**：见「后续优化清单」第 6 项（C2 地址/sessionID 等改 `[]byte` 纳入 sleep mask；启动期 AMSI/ETW patch —— 注意 `edr_blind` 现在是任务级 + 需管理员，存在鸡生蛋问题，且 AMSI patch 对 Go 默认载荷收益≈0；EDR/杀软名单字符串外置，即 `edr_windows.go` 的 `defaultAVProcesses` 改由服务端下发；动态测试矩阵自动化）。
-- **验收口径**：干净 VM（仅 Defender）里默认载荷执行后 5 分钟内不触发 `Behavior:` 类拦截；装有 360 的机器上给出"签名载荷可执行 / 白加黑链可执行"的实测记录（**需要目标机，本机因安全软件拦截无法执行任何新 PE**）。
-- **需要操作员提供**：放行环境 / 目标机（与第 4 项相同）。
-
-### P1 Agent / 智能化（延续 v1.3.x 方向）
-
-> **状态：全部未开工**（S2 只做了"长任务可靠性"这一层，本节是能力层方向）。均为纯代码项，无外部材料依赖，可按需插队。
-- **分层记忆持久化**：agent 会话记忆落 sqlite（当前 run 内存保留 30 分钟即清），支持跨重启召回历史目标/判断/已采集情报；前端可按会话回放历史 run。
-- **多 Agent 编排 / 委派**：把单 run + 剧本 delegate 升级为「规划者 + 执行子代理」，子代理并发跑不同会话/路径，规划者聚合结果并去重。
-- **执行轨迹回放面板**：timeline 已有结构化事件（thinking/tool/result），前端做可暂停、可跳转、可导出的回放视图。
-- **信息收集「一键情报库」**：侦察报告结构化（用户/组/IP/端口/杀软/凭据线索）写入 intel 库，后续会话直接 `intel_query` 命中，避免重复侦察。
-- **工具面原子化/收敛**：playbook 与 agent 共用统一原子工具层；长耗时任务（大文件传输、凭据 lsa）设计为「可查询的原子任务」而非仅轮询。
-- **Agent 与 BYOVD/EDR 对抗联动**：把「检测到杀软 → 选路（驱动击杀/EDR 失明/进程注入）→ 验证是否成功」做成确定性剧本，减少模型自由发挥。
-- **验收口径**：每项各自定义；共同前提是不得让"未验证的能力"出现在工具面（沿用 S6 的守卫测试做法）。
-
-### P2 平台工具库与远程加载（不增植入端体积）
-
-> **状态：全部未开工**（`data/tools/` 只有 `.gitkeep`）；执行顺序见「后续优化清单」第 7 项。
-> **设计原则**：植入端保持"小而精" —— 只内置命令执行/文件/进程/注入/凭据/截屏/网络等底层原语；高阶能力（端口扫描、横向、凭据传递、内网探测）**不编译进植入端**，由服务端工具库按需远程加载执行。
-
-- **2.1 工具库建设（前置）**：目录按**平台/架构**组织 `data/tools/<os>/<arch>/<tool>`，同级 `manifest.json` 记元数据（用途、平台/arch、调用参数示例、**SHA-256**、来源出处、许可、体积、最后校验时间）。**预置范围（已确认）**：只预置**自研脚本型工具**（纯文本、可审计、无版权/供应链风险）；**第三方二进制不预置**，走"按需下载 + sha256 校验 + 版本轮换"，下载源与哈希写进 manifest（agent 用 `remote_download` 拉到服务端 `data/tools/`，再分发到会话）。校验：下载后强校验 sha256（不匹配即拒绝并告警），记录来源 URL 与时间；定期轮换版本。
-- **2.2 能力链（都走远程加载）**：内网探测链（端口扫描/主机发现/共享枚举 → 结果收敛进情报库，落成确定性 playbook）；横向移动（复用既有 exec 原子机制、会话忙期判活与高危审批护栏）；凭据利用（采集仍走植入端原生原语，**利用**工具走远程加载并纳入高危审批）；免杀/规避载荷远程化（新注入方式、新载荷形态按需下发，痕迹清理做成轻量命令链 playbook）。
-- **验收口径**：植入端二进制体积/功能面不随上述能力增长；「下载→校验→内存加载→执行→回传→清理」闭环可跑通；工具元数据缺失/哈希不符时明确拒绝执行。
-- **需要操作员提供**：第三方二进制的下载源与哈希清单策略（预置只放自研脚本）。
-
-### P3 平台 / 工程
-
-> **状态**：除"Release/打包的 CI 校验部分"与"前端杀软对抗页重排"外**均未开工**；执行顺序见「后续优化清单」第 10 项。
-
-- **多通道一致性**：MQTT/relay/HTTP-polling 与 TCP 的判活、忙期、任务重放语义对齐（TCP 最完整；已统一判活入口 `Session.IsAlive`，其余语义仍待对齐）。
-- **Release/打包**：✅ CI 三级校验（`toserver -version` == tag、zip 内容清单、`checksums.txt`）已完成；❌ tag 前接 `e2e_smoke.ps1` 未做。
-- **配置热更新边界**：心跳超时等会话参数改动后对存量会话的生效时机文档化（现为"改动后新会话立即生效、存量会话按采样自适应"）；`git stash@{0}` 里的"配置热重载报错可见"**已捡回并真机验收**（见 S6 阶段详情 P0-2 段），这里只剩"生效时机文档化"本身未做。
-- **前端**：✅ 杀软对抗页信息架构已重排（BYOVD 区块 + 驱动加载前自检结论直接标在按钮与提示区）；❌ 任务列表虚拟滚动（大量任务不卡）、Sessions/仪表盘 WS 事件统一订阅组件（现在多处重复实现）未做。
-- **可观测性**：屏幕流帧限速丢弃数、广播去抖抑制次数等运行指标暴露到界面/日志汇总（当前只在日志里；v1.3.4 已把"真正烘焙进载荷的参数"写进构建日志）。
-- **服务端在线更新（自更新）**：
-  - **现状（手工、会断线）**：升级 = 停掉 `toserver(.exe)` → 覆盖文件 → 重新启动；期间**所有会话与 SOCKS5 隧道全断**。既没有版本检查，也没有产物校验、回滚或审计。
-  - **目标**：控制台「关于/设置」提供「检查更新 → 查看版本与变更摘要 → 确认更新」，随后自动完成**下载 → 校验 → 落盘 → 原子替换 → 重启 → 自检**，全程有日志与状态回显；失败时必须**保持现有二进制可用**。
-  - **实现要点（按顺序做）**：① **先做服务化/守护**（前置）：当前服务端是前台进程，替换后没人拉起 —— 需要 `install.ps1`/`install.sh` 支持注册为 **Windows 服务 / systemd unit / 计划任务**；② **原子替换**：Windows 上无法覆盖正在运行的自映像 —— 下载到 `toserver.new` → 校验 → 旁路脚本 `MoveFileEx(..., MOVEFILE_REPLACE_EXISTING)` 或"改名旧文件 + 换名 + 重启"；Unix 侧可直接 `rename`（原子）；③ **校验与防降级**：强制 **sha256 比对**（复用 Release 的 `checksums.txt`），可选 **Authenticode 签名校验**（复用 `builder/sign.go` 的验签能力）；拒绝从更高版本降级、拒绝摘要/签名不符；④ **数据安全**：更新前**自动备份 `data/toshell.db`**，保证 schema 迁移向后兼容（新版本启动失败可回滚上一版二进制 + 数据库）；⑤ **安全边界（重要）**：服务端二进制 = 完整 C2 控制端，**更新通道被劫持等于整个 C2 被接管** —— 因此默认**关闭**在线更新，需显式开启并配置**可信更新源白名单**（自建源 / GitHub Release）+ 独立更新密钥；更新动作要求二次确认并写审计日志。
-  - **验收口径**：在测试环境从 v1.3.5 升到下一版：点「检查更新」→ 显示版本与摘要 → 确认后自动下载校验、替换、重启 → 植入端自动重连、配置与 sqlite 数据不受影响；**断网 / 摘要不符 / 签名不符时明确失败且不改变现有二进制**；保留上一版二进制可一键回滚。
-- **需要操作员提供**：自更新需要可信更新源（自建源 / GitHub Release）与更新密钥决策。
-
----
-
-## 已完成（归档，见 [CHANGELOG.md](CHANGELOG.md) 对应版本）
-
-
-
-<details>
-<summary><b>v1.3.5（2026-09）</b></summary>
-
-- ✅ **Web 控制台 UI 全面优化**：修掉"短别名变量没定义、只有深色兜底值"导致**浅色主题配色错误**的根因，统一 token（颜色/间距/字号/动效/焦点环）；新增一层基础件（`web/src/components/ui`：Card/Section/Badge/RiskBadge/Callout/Field/Check/Empty/Skeleton/Stat/KeyValue/Toolbar/Code）与 `ui-*` 工具类；生成载荷页把 30 多个控件收进可折叠分组、一键上线命令改为**分组筛选 + 搜索 + 复制全部 + 风险等级徽标**、新增**落地建议**与**签名结论**提示、**载荷 ID 一键复制 + 加载器链命令「填入载荷 ID」**、`dll` 格式出现导出名与"加载即启动"选项；侧栏折叠持久化与窄屏浮层、会话详情 13 个 tab 改为**常用常驻 + 「更多 ▾」下拉收纳**（下拉被 tab 条 `overflow` 裁掉的坑已修）、仪表盘/会话列表/设置/登录/关于统一卡片与空态/骨架屏；设置页新增 `builder.sign_*` 等构建配置可视化填写；顶栏「在线」改为**真实探测 `/api/v1/health`**（20s + 窗口聚焦）。
-- ✅ **修掉"光标狂闪 / 状态灯爆闪"（用户实测）**：根因是本项目 `prefers-reduced-motion` 规则写成 `* { animation-duration: 0.01ms !important }`，把**所有 `infinite` 动画压到 0.01ms 却仍无限循环**（≈10 万次/秒），xterm v6 的 CSS 光标闪烁首当其冲。现改为只收敛 `transition-duration`、装饰性无限动画逐个点名 `animation: none`，**永不压缩动画时长**（`web/src/index.css` 已注明原因）。
-- ✅ **构建后代码签名（P0-5）**：pfx / 证书存储指纹两种模式；签名栈优先 signtool、回退系统自带 PowerShell（密码走环境变量、不进命令行）；签名后复核并回传签名者/状态/中文说明；前端「上次构建」显示签名结果。实测自签证书已签上（`SignatureType=Authenticode`、+1.4KB），并修掉两个真实坑：PowerShell 5.1 的 `Get-PfxCertificate` 无 `-Password`；`UnknownError` + 有签名者应判为"已签名但链不受信任"。
-- ✅ **8 条加载器链 + 落地建议（P0-5）**：白加黑 DLL 侧加载 / 计划任务 + 已签名宿主 / rundll32 / mshta / regsvr32 Squiblydoo / certutil + 宿主 / PowerShell 内存注入 shellcode / mshta + 宿主注入骨架，每条带 `note`（前置条件 + 风险等级）；`LoaderAdvice()` → `loader_advice_title/tips` 给出降级顺序；新增 `docs/LOADERS.md`。
-- ✅ **BOF 按需编译（P0-5）**：`-tags bof` 才编译，默认载荷 `beaconAPI=0`（勾选后 22），full 档案最后一项高信号明文消失；新增 `TestBOFIsOptIn`。
-- ✅ **Go 构建期指纹擦除（P0-5）**：`ScrubGoFingerprint` 擦除 buildinfo 魔数 / 窗口内版本串 / `Go build ID:` 前缀（长度不变），exe 与 dll 路径都接入，实测均归零；单测覆盖擦除/幂等/边界。
-- ✅ **动态免杀第一批：休眠期内存加密（P0-5）**：新增 `sleepmask_windows.go`/`_unix.go`（模板双份镜像），在空闲窗口（启动随机延迟 / HTTP 轮询 / 重连退避 / 非工作时段）对**隧道 SM4 子密钥**与**任务结果缓存**做 XOR 掩码，休眠走 apihash 解析的 `NtDelayExecution` 并分片 ≤300ms + 抖动；`ensureUnmasked()`（abort 标志 + ≤2s 轮询）保证用密钥的路径最多等 1 个分片；结果缓存用 `maskIfMaskedCopy()` 加密副本，避免与发送缓冲互相干扰。**如实说明**：加密不了整个镜像/代码段（Go runtime 时刻在跑），C2 地址这类 string 也暂不在范围内（列入待做 1）。
-- ✅ **去 RWX（P0-5）**：审计植入端全部 `VirtualAlloc/VirtualProtect/NtProtectVirtualMemory` 调用点，改为 **RW 写 → RX 执行**两段式（`memprotect_windows.go`/`_unix.go` 提供 `allocRW`/`protectRX`/`protectRW`/`withWritable` 并**硬拒 `PAGE_EXECUTE_READWRITE`**），覆盖 `blob`/`bof`/`carve`/`imgexec`/`plugin` 等路径；实测默认载荷 `PAGE_EXECUTE_READWRITE=0`。
-- ✅ **验证文档 `docs/EVASION.md`**：把「落地 / 动态免杀 / 静态降特征」分开，逐项标注**验证状态**与验证方法（含"一次只改一个变量 + ≥3 次重复 + 记录拦截原文"的纪律），并明确标注运行期未实测的部分。
-- ✅ **设置页拆成 4 个分页**：原先一页堆 10 个分组（靠滚动监听高亮侧栏），现按主题分为 通用与服务 / 植入端与载荷 / 集成与通知 / 账户与鉴权，左侧导航切换、只渲染当前分页；`draft`/`baseline` 仍是组件级单一状态（切页不丢未保存改动），吸顶保存条按分组汇总；支持 `/settings?page=` 深链接与旧 `#sec-*` 锚点映射；内容列限宽 + 分组间距走 `--sp-*` 标尺，窄屏侧栏变横向标签条。
-- ✅ **设置页「通用与服务」「日志与审计」改为可写**：这两个分组的保存接口 v1.3.5 已放行（`server.api_host/api_port`、`logging.level/format`、`listener.heartbeat_timeout`、`listener.write_queue_size`），页面上却仍挂着"需改 server.yaml"的旧提示且输入框 disabled —— 前后端口径不一致已修正，并标注"改端口/主机需重启、日志与心跳超时热生效"。
-- ✅ **关于页许可证与文档改为在线预览地址**：原来指向 `/LICENSE`、`/USAGE.md` 等**并不由控制台静态资源提供**的同源路径（点了 404），现改为 GitHub `blob/main` 在线地址并补齐 EVASION/LOADERS/DEPLOY-DOMAIN-CDN/SECURITY；首页两个空 `href=""` 一并填上。
-- ✅ **发布包补上 `docs/`**：CI 与本地打包脚本此前都不带 `docs/`，而包内 README/USAGE 大量链接指向 `docs/EVASION.md`、`docs/LOADERS.md`（截图也在 `docs/screenshots/`）—— 包内死链；现两条打包路径都带上，并加入包内容校验清单。同时修掉 `retry_wait == 0` 硬编码 5（没读 `implant.retry_wait`）导致"设置页配了不生效"的口径不一致。
-- ✅ **版本 1.3.5**：全量版本号统一。
-
-- ✅ **DLL 载荷修成真 DLL（P0-5 落地链的关键前置）**：`format=dll` 以前因 `CGO_ENABLED=0` 下 `import "C"` 被静默跳过，产物其实是"改了扩展名的 EXE"（实测 `IMAGE_FILE_DLL=false`、导出表为空），白加黑/rundll32 三条链第一步就失败。现在用 `-buildmode=c-shared + mingw-w64 gcc`（**要求与目标架构一致的 gcc**，否则明确报错而不是产出错误架构的 DLL）编译真 DLL：`IMAGE_FILE_DLL=true` + 导出表；默认**加载即启动**（`init()` → `go startImplant()`），导出名可配（默认 `Start`，可填宿主期望的系统 API 名；C 侧 `__stdcall` 包装，386 用 `-Wl,--kill-at` 剥 `@16`）；能力接口新增 `dll_available/dll_message`，生成载荷页显示缺哪个 gcc。实测 386 DLL 导出 `Start` 与自定义 `GetFileVersionInfoW` 均正确。
-- ✅ **共享库构建取舍（如实说明）**：cgo 包不能带 Go 汇编 → 排除 PEB 汇编与 amd64 直接系统调用，新增 `directsyscall_windows_amd64_shared.go` 走 apihash 回退；`main.go` 拆出 `startImplant()`（DLL/exe 共用）+ `entry_exec.go`（`!shared`）。
-- ✅ **修 JSON 响应 bug**：构建失败时错误文本含换行会产出非法 JSON（前端只看到"解析失败"而非真正原因），新增 `writeJSONError` 并改写构建相关错误响应。
-</details>
-
-<details>
-<summary><b>v1.3.4（2026-09）</b></summary>
-
-- ✅ **动态查杀定位（P0-5 前置）**：本机（360 + 电脑管家 + 无边界安全系统）实测证明"新生成/未签名 PE 一执行就被拒并删除"，与载荷代码无关（Hello-World Go 程序同样被拒、MS 签名程序正常）——结论与证据写进 `CHANGELOG.md`，避免后续重复踩坑。
-- ✅ **植入端默认行为收敛（P0-5）**：启动时"枚举全系统进程 + 比对 38 个杀软进程名"默认关闭（`-tags evasionscan` 才编译，前端开关默认关）；pclntab 高信号标识符与文件名中性化（`stomp*→carve*`、`memexe→imgexec`、`memload→blob`、`evasion→gate`、`loadShellcode→runBlob` 等，`light` 档案连 `beacon*` 都为 0）。
-- ✅ **三个"配置了却无效"的缺陷（P0-5）**：`startup_delay_min/max` 请求字段补齐并透传（此前被静默丢弃）；`interval==0 → 5s`、`jitter==0 → 2%` 的硬编码覆盖改为优先跟服务端配置（示例配置默认 60s/20%）；驱动加载失败回传 Win32 错误码与排查结论。构建参数写入服务端日志。
-- ✅ **驱动加载前自检（P0-1）**：manifest `sha256` 一致性硬拦（不一致 400 拒发）+ `WinVerifyTrust` 签名/篡改校验与签名者 + 易受攻击驱动黑名单策略提示（不内置名单）；`GET /drivers/{name}/verify`；前端标出"哈希不符/未签名"并展示警告。
-- ✅ **内存执行下发前 PE 预检（P0-2）**：手写 PE 解析 + Go 载荷识别，Go/架构不符/.NET 直接拒绝并给原因与建议，TLS/无重定位/donut 给警告，`force:true` 可强制但留痕。
-- ✅ **发版门禁（P0-4）**：`scripts/e2e_smoke.ps1`（临时服务端 + 鉴权/路由 + 三档载荷 + 可选真植入端上线与任务回执 + 摘要与非 0 退出）；CI 增加 tag/版本一致性、zip 内容清单校验与 `checksums.txt`。
-- ✅ **版本 1.3.4**：全量版本号统一（服务端默认版本、Web、About、README、USAGE、部署脚本、打包脚本）。
-
-</details>
-
-<details>
-<summary><b>v1.3.3（2026-09）</b></summary>
-
-- ✅ **会话判活去抖（P0-1）**：阈值 = `max(heartbeat_timeout, 3×实测心跳间隔)`（按会话自适应 + 首周期保护），三监听器统一判活、扫描 10s→5s；`session_offline` 延迟 15s 观察窗，窗口内重连不发任何事件；重复注册不再重复广播上线（webhook 同步去重）。实测 60s 心跳跑 220s 零抖动、真掉线仍按 3m1s 判死。
-- ✅ **屏幕流/截图参数化（P0.2 Windows 部分）**：`fps/quality/max_kbps/monitor/max_width/format`；植入端带宽自适应（超限降质→降帧+限宽，有余量逐级恢复）；服务端帧限速/合并（硬上限 10fps）；捕获失败回传原因帧。实测 2560×1440 → 640×360 JPEG（343KB → 21KB）。
-- ✅ **内存执行 EXE 带参数**：`fileless_exec` 新增 `exe_mem`（反射映射 + PEB 命令行注入 + IAT 退出重定向 + 架构校验 + `wait_ms`）；修正 donut 路径 `Thread/ExitOpt` 导致**杀宿主**的老 bug，并支持 donut 参数。实测 argv 正确注入。
-- ✅ **BYOVD 驱动换代**：删除 `RTCore64.sys`，内置 **kgameprotect.sys**（WHQL 签名、设备 `\\.\kgameprotect`、终止 IOCTL `0x222048`、SHA-256 与 LOLDrivers PR #428 一致）；新增 `byovd_kill` 任务/接口/前端入口；`ppl_kill` 保留句柄窃取路线（能力变化见 P0-1）。
-- ✅ **C 植入端工具链探测（issue #6）**：配置 → 环境变量 → 便携目录 → 常见安装目录 → PATH → **注册表 PATH** 逐级探测 + `gcc -dumpmachine` 架构校验；garble 改为真实构建探测（修掉"显示可用但构建必失败"）。
-- ✅ **多平台 webhook（issue #7）**：飞书 `msg_type`+`content.text`／企业微信 `msgtype`+`text.content`／Slack／Discord／钉钉 markdown 各发各的结构；飞书 body 内加签；响应体业务码（`code`/`errcode`/`ok`）判定成功与失败原因。真植入端上线实测通知送达。
-- ✅ **一键命令上线**：下载地址改为服务端按配置解析（`public_host` 优先，否则控制台地址/`server_url` 主机/内网 IP，不可达时显式告警）；Windows 6 种 + Linux 6 种免杀变体；载荷列表实时重新生成。
-- ✅ **版本 1.3.3**：全量版本号统一；CI `main.version` 跟随 tag。
-
-</details>
-
-<details>
-<summary><b>v1.3.2（2026-09-14）</b></summary>
-
-- ✅ Web 控制台防资产测绘（Basic 前置门槛 / 404 伪装 / `/__gate` 隐蔽入口，issue #1）
-- ✅ 配置写入可靠性：原子写 + 读-改-写保注释、凭据必须落盘（否则拒绝启动）、设置页不再破坏 API Key（issue #2）
-- ✅ 跨平台载荷构建修复（macOS/Linux full/light 标签冲突，issue #2）
-
-</details>
-
----
-
-## 附：本会话实测发现、尚未修的问题（现场记录）
-
-| 现象 | 影响 | 处置建议 |
+| 取值 | 含义 | 证据要求 |
 |---|---|---|
-| garble v0.16 要求 Go ≥ 1.26，本机 go1.25.0 → 任何 garble 构建必失败 | 混淆选项不可用（界面已如实显示"不可用 + 原因"） | 升级 Go 或安装匹配版本 garble（属环境问题，非代码缺陷；本机已装 v0.15.0 可用） |
-| 本机装有 360/电脑管家/无边界安全系统，**新生成或未签名的 PE 用 `Start-Process`/`cmd start`/`.NET Process.Start` 启动一律 `Access is denied`**（连 Hello-World Go 程序也一样，MS 签名程序正常），且植入端 exe 放一会儿会被直接删文件 | 常规启动路径下本机做不了动态验证（`go test` 的新测试二进制同样会被杀） | **可用绕法（本轮实测有效）**：用 **WMI `Win32_Process.Create`** 启动载荷（拦截只挂在用户态 `CreateProcess` 调用方上，走 `WmiPrvSE` 起进程不受影响）；需要真实 stdout 时用 `cmd.exe /c "payload.exe > log 2>&1"` 包一层（给不了控制台就没法验输出回传）。长期解仍是干净 VM（仅 Defender）或 CI |
-| Go 编译的 EXE 用 `exe_mem` 反射执行会崩宿主（双 Go runtime） | ✅ v1.3.4 已在下发前**明确拒绝**并给建议（P0-2 预检） | —— |
-| `exe_mem` 下载荷自行退出会带走植入体（CRT 内部 ExitProcess） | 只对"跑完即退"的工具致命 | ✅ **本轮已修并真机验收**：IAT 双层拦截（镜像 + 已加载模块）改写为原生 `ExitThread` 桩、stdout/stderr 回传。改前载荷执行当秒掉线、改后 30s 全程在线且退出码/stdout 正确；覆盖边界见 S6 阶段详情 P0-2 段 |
-| PPL 进程杀不掉（无具备内核读写的 `rw` 档驱动） | Defender 等 PPL 保护进程需句柄窃取 | 补 `rw` 档驱动档案与 `purpose` 选路（见「后续优化清单」第 5 项 / 附 A P0-1） |
-| 一条上线命令的下载地址依赖人工配置 `public_host` | 配置错则命令不可用（已有告警与自动回退） | 可加"服务端主动探测该地址可达性"的自检（与「后续优化清单」第 10 项的可观测性一起做） |
+| ✅ 完成 | 已实现且**有实测或测试证据** | 能指到测试名/脚本输出/真机记录 |
+| 🟡 部分完成 | 主体做了，子项未做 | 未做子项必须写在同一行"剩余什么"里 |
+| ⚠️ 已实现未验证 | 代码在里面，但**没有真机/真实链路验证** | 必须写明"缺哪种验证" |
+| ❌ 未开工 | 无代码或无可用实现 | 允许写"只有骨架/stub" |
+| 🚫 已定论不做 | 有明确理由的取舍 | 必须附依据（实测数字或工程判断） |
+
+> **口径纪律**：本文件与 CHANGELOG **不得出现"完全免杀""绕过所有 EDR""100% 免杀"**这类表述。v1.4.0 之前的所有"免杀已生效"结论都**只有静态/结构级证据**——在拿到目标机放行环境之前，不得升级为运行期结论。
+
+---
+
+## 定位与不做什么
+
+**ToShell 是什么**：自托管的授权红队 C2 —— Go team server（单二进制，内嵌 React 控制台）+ 多通道多平台植入端（Go 为主、C 为辅）+ 内存模块体系（`exec_module`）+ 开放自动化接口（MCP / REST）。MIT 许可，**代码可审计**。
+
+**服务对象**：授权范围内的红队演练、内网横向验证、EDR/蓝队检测能力评估、安全教学实验。
+
+### 明确的边界（写在最前面，避免被误读成承诺）
+
+| 不做 | 理由 |
+|---|---|
+| 🚫 **不做免杀产品** | 我们只做"降低特征 + 明确分级 + 如实标注验证状态"；**不承诺对抗任何具体 EDR/AV**。本机能跑通 ≠ 目标机不被拦（本机实测：未签名新 PE 在进程创建阶段即被拒，见 `docs/EVASION.md`） |
+| 🚫 **不内置任何内核驱动 / 第三方二进制** | BYOVD 驱动由操作员自备并自负合规责任（`internal/server/drivers/verify*.go` 只做校验与选路）；`data/tools/` 只放自研脚本 |
+| 🚫 **不做"原版对齐"** | 不追求与任何商用 C2 的协议/载荷互操作（详见 `docs/VSHELL-ANALYSIS.md` §0：无授权依据，且会把错误码体系绑死） |
+| 🚫 **不做授权/许可门控** | MIT 全功能开源；不引入"校验失败静默降级"的 fail-open 路径 |
+| 🚫 **不做品牌冒充外观** | `resource_preset="neutral"` 只填操作员没给的字段，**不预置"像系统组件"的公司名/产品名**（`internal/server/builder/patch_resources.go`） |
+| 🚫 **不把未验证能力放进工具面** | 未验证的能力不得出现在 MCP/Agent 可自主调用的工具表里（S6 的两条守卫测试钉住 L1+ 不可达） |
+| 🚫 **不做移动端/固件植入端** | Android/iOS 与 IoT 的威胁模型、体积约束、授权形态完全不同；投在这里会拖垮主线的可维护性 |
+
+**授权红线**：仅限**明确书面授权**的目标；`DISCLAIMER.md` / `SECURITY.md` 的边界条款优先于本文任何功能描述。
+
+---
+
+## 版本节奏
+
+| 版本 | 主题（一句话） | 时间感 | 出口条件（可验收） |
+|---|---|---|---|
+| **v1.4.1**（补丁，本轮交付） | **把"显示/可用性"层的真实缺陷修掉，不引入新能力** | 2026-10 | 本文「v1.4.1 登记」7 项全部落地；`go build ./...` / `go vet` / `go test ./...` 全绿；`scripts/e2e_smoke.ps1` 无 ❌ |
+| **v1.5** | **从"能用"到"可运营"**：投递面、批量操作、权限骨架、隧道健康、可观测计数、通道落点收敛 | 2026-11 ~ 2026-12 | P1 清单前 4 项各有一条**验收脚本或真机记录**；新增能力全部进状态表；无"点了没反应"的入口 |
+| **v1.6** | **第二植入端 + 冷门通道**：Rust 植入端（可行但为"第二形态"）、DNS/DoH 或 UDP 通道、L2/L3 真机验证 | 2027-Q1 | Rust 植入端能完成"上线 + 3 类任务 + 体积达标"；新通道端到端跑通一条；AV-Ops L2/L3 至少各一条真机记录 |
+| **v2.0** | **生态化**：插件市场与签名、OpenAPI+SDK、多实例联邦、可验证对抗分级对外口径、AI 原生操作员 2.0 | 2027-Q2 起 | 5 条"护城河"各有一个**可度量里程碑**达成（见 §6.7） |
+
+> **节奏纪律**：补丁版（v1.4.x）只修不扩；次要版本（v1.5/v1.6）必须自带验收脚本；主版本（v2.0）才允许做**破坏性 API 变更**（由 `api/v1` → `api/v2` 承载）。
+
+---
+
+## 状态总览
+
+> 一行一个交付项。**"依据"列必须能指向代码或脚本**；本次已修正 4 处与代码不符的旧表述（见「技术债」末节 D1~D4）。
+
+| 能力 | 状态 | 依据（代码 / 实测） | 剩余什么 |
+|---|---|---|---|
+| 会话判活 | ✅ | 阈值含 3 倍心跳余量 + 广播去抖（`internal/server/session/`，`liveness_test.go`）；实测 60s 心跳连跑 220s 零抖动 | 无 |
+| 屏幕流 / 截图（Windows） | ✅ | GDI + PrintWindow 回退，参数化 fps/quality/max_kbps/monitor/max_width（`builder/implant/screen_stream_windows.go`、`api/screen_frame_limiter.go`） | 无 |
+| 屏幕流 / 截图（Linux/macOS） | ❌ | `builder/implant/screen_stream_unix.go` 为 stub，直接返回 "only supported on Windows" | X11（Wayland 后续）/ ScreenCaptureKit；均需真机 |
+| 内存执行（shellcode / BOF / DLL / EXE） | ✅ | 反射映射 + 参数注入 + 下发前 PE 预检（`builder/pecheck.go`、`handlers_fileless.go`） | 无 |
+| 内存执行加固（宿主不掉线） | 🟡 | IAT 双层退出桩 + stdout/stderr 截流（`builder/implant/mexecguard_windows.go`）；真机 30s 全程 active、退出码 7、stdout 回传 | 仅 IAT 层（`GetProcAddress` 裸调拦不到）；无控制台时抓不到 stdout；`dll` 分支未真机；HTTP/WS/MQTT 与 amd64 未复测 |
+| BYOVD 驱动（自备 + 档案 + 自检） | ✅ | 不内置驱动；`drivers/verify*.go` sha256 硬拦 + Authenticode + 黑名单提示 | 无 |
+| 驱动体系（purpose 选路 / 残留台账 / catalog 签名声明） | 🟡 | `drivers/route.go`（purpose=kill/rw/both 纯函数选路）、`drivers/ledger.go` + `BuildCleanupPlan`（清场**指引**）、`drivers/signature.go`（声明↔实测一致性） | 清场是"给可照抄命令的指引"，**不是自动清场任务**；真实 `.sys` 加载未真机验证 |
+| 代码签名（构建后 Authenticode） | 🟡 | pfx / 证书存储指纹双模式 + 签名后复核（`builder/sign.go`、`finalize_order.go`）；自签本机实测已签上 | **真实证书/EV 与目标机信任链未落地**（无材料） |
+| 加载器链 | 🟡 | 8 条链的命令模板 + 降级顺序（`api/oneliner.go`、`docs/LOADERS.md`） | **无一条真机落地记录**；无 loader 源码/工程模板（见 P1-2） |
+| 运行时行为足迹 | ✅ | 启动不枚举进程（`evasion_scan` 显式开启）、pclntab 中性化、BOF 默认不编译、Go 指纹擦除、启动延迟/心跳可配 | 无 |
+| 动态免杀（sleep mask / 去 RWX / apihash / 直调） | ⚠️ | `builder/implant/sleepmask_*.go`、`memprotect_*.go`、`apihash_windows.go`、`directsyscall_windows_amd64*.go` | **运行期零实测**（本机杀软会删新生成 PE）；批次 2（C2 地址改 `[]byte`、ntdll 脱钩 + ETW patch）未开工 |
+| uTLS / JA3（HTTP 通道） | ⚠️ | `builder/implant/transport_tls_utls.go`（`HelloChrome_102`，仅 `transport_http && !light`；依赖 `refraction-networking/utls v1.4.0`，见 `release/implant/go.mod`） | **未抓包验证 JA3**、未做真实 CDN 联调；WS 仍走标准库 TLS（`transport_ws.go`） |
+| 流量拟态（HTTP 反代 / 响应整形） | 🟡 | `internal/server/mimicry`（cdn/api/stream 三套模板，`Shape` + `DecoyHandler`）+ `mimicry_site` 反代（`listener/http_polling.go`） | 仅 HTTP 监听器；**WS 的非 C2 路径只回 404、不反代**；无真机探测面复核 |
+| WebSocket 探测面收敛 | ✅ | 只对 `listener.ws_path` 一条路径升级、变形路径一律普通 404、Host 名单 + `front_domain`（`common/transport/websocket.go` 的 `UpgradePolicy`） | 无（per-listener 覆盖属 v1.5 增强，不算本项未完成，见 T19） |
+| 中继（Beacon Mesh） | ✅ | `listener/relay.go` 多跳（`maxRelayHops=16`）+ `TypeRelay` 帧路由；非 TCP 通道明确 409 | 中继节点无独立健康探测（见 P1-5） |
+| 任务队列 / 状态机 | ✅ | `task.Manager` + 事件驱动等待 + 重连补发/禁自动重试（破坏性任务）+ 挂起恢复（`internal/server/task/`） | 无（入库截断 500 字节属独立债务，见 T13） |
+| 文件传输（分块 + 断点） | ✅ | 1 MiB 分块 + offset 落盘 + `resume` 任务 + 进度（`listener/handler_core.go`、`task.TrackTransfer`） | 无 |
+| 文件预览（后缀白名单 + 二次校验） | ✅ | `internal/common/preview`（分类/上限/二进制嗅探/图片魔数）+ `POST /sessions/{id}/files/preview` 二次校验 + `GET /files/preview-policy` 下发；前端 `previewPolicy.ts` + 弹窗确认 | 只覆盖"内联预览"，下载不受影响；>64 MB 直接 413；超大文本只回前 64 KB（植入端无 range 读取） |
+| 代理认证（SOCKS5 / HTTP CONNECT） | ✅ | `internal/common/tunnel/auth.go`（RFC 1929 + `Proxy-Authorization` Basic，常量时间比较，HTTP 路径同样校验） | 认证在 **C2 侧监听器**，植入端只是 TCP 中继、不解析 SOCKS5；留空 = 无认证 |
+| MCP（对外协议服务） | ✅ | `internal/server/mcp`：38 工具三档分级、JSONL 审计、RPM/并发/句柄三闸、默认关闭只绑回环（空 token 拒启动） | 无（工具面**故意**不含 `exec_module` 与 L1+ 动作；多客户端互操作冒烟属生态项，见 §6.1） |
+| Agent 长任务可靠性 | ✅ | 4 张表 + `agentstore` + 事件驱动 + 长结果外置回读 + 四层上下文 + 双 token 预算 + SSE 断点续传（`internal/server/ai/`） | 无（两个已知缺陷已修，见下两行） |
+| Agent 缺陷①（重复显示上一轮步骤） | ✅ | `09e3bbe`：`web/src/pages/agentRound.ts` 按轮次切 timeline + per-run SSE 水位线 | 无 |
+| Agent 缺陷②（并行 `tool_calls` 丢失） | ✅ | `9c98599`：`RunAgent` 遍历全部声明项；回归用例 `ai/parallel_tool_calls_test.go` | 无 |
+| 能力位图（载荷上报 → 标签/按钮） | ✅ | `internal/common/features` 唯一纯函数 + `cap:v1:<hex>` 随心跳上报；服务端 `Resolve()` 上报优先、老载荷按 OS 兜底 | 无 |
+| `exec_module` 内存模块 | 🟡 | ABI v1（`common/moduleabi`）+ 一次性 token + 9 步校验链 + `TypeModuleData(0x0E)` | 只真机测过 **TCP**；单帧上限 4 MiB 无分块；未暴露给 MCP/Agent 工具面 |
+| AV-Ops 分级（L0/L1） | ✅ | `common/avops` 表驱动 + 聚合入口 + 七步前置检查 + 审计 + 面板；L2+ 出厂关、禁自动重投递 | 无（L1 的 `allowed:false` 语义坑——区分"硬阻塞"与"需确认"——已修） |
+| AV-Ops（L2/L3/L4） | 🟡 | L2/L3 的**被拒路径**已真机验证（缺 confirm→409、tier 不符→400、L2→403…且不产生任务）；L0 真实下发回传有记录 | **L2/L3 放行路径零实测**（需授权 VM + 操作员自备驱动）；L4 无任何落地动作（`implemented:false`，刻意不造假入口） |
+| Web 控制台 | ✅ | 主题 token + 组件层 + 折叠分组 + 风险分级徽标 + 真实 `/health` 顶栏 + 数据驱动标签页 + AV-Ops 面板 | 移动端体验未评估（见 P3-6） |
+| 发版门禁（CI 内） | ✅ | `release.yml` 的 `e2e-smoke` job 跑 `scripts/e2e_smoke.ps1 -SkipImplant`，发布 job `needs: [web, e2e-smoke]`；CI 另跑 build/vet/test | **托管 runner 固定 `-SkipImplant`**（无真实植入端上线），真机上线仍需本地跑 |
+| 平台工具库 `data/tools/` | ❌ | 目录下只有 `.gitkeep`，无 manifest、无工具、无下载校验代码 | 目录规范 + manifest（sha256/来源/许可）+ 远程加载闭环（P2-3） |
+| 第二植入端（Rust） | ❌ | 无代码；v1.4.1 已出可行性结论（见 P2-1） | 立项在 v1.6 |
+
+---
+
+## v1.4.1 登记（补丁版，本轮交付）
+
+> 本批全部是**补丁级**改动：不加新协议、不动 `go.mod` 的 server 依赖、不改变对外错误码语义（新增错误码只增不改）。
+
+| # | 项 | 类型 | 状态 | 依据 / 需求 | 验收口径 |
+|---|---|---|---|---|---|
+| 1 | **植入端 Rust 版本可行性评估** | 立项评估 | ✅ 已出结论（含实测体积） | 结论：**可行，作为"第二植入端"**；本机实测 `light` 等价物 **350,720 B**（Go 同形态 2,946,805 B，小 8.4 倍），`light+http` 走 SChannel 仅 **≈368 KB**（Go 5,455,613 B，小 14.8 倍）；工程量约 13,000~15,000 行 Rust，成本约为 Go 版的 60~70% | 结论入档 `docs/RUST-IMPLANT.md` + 探针入档 `docs/rust-probe/`；**立项排 v1.6**（P2-1），不在 v1.4.1 写产品代码 |
+| 2 | **显示层修复**：Linux 会话用户名不再 `unknown`；杀软击杀回显、启动项回显的 GBK/CP936 乱码 | 缺陷修复 | ✅ 已完成（Linux 运行时未验证） | 根因：`builder/implant/platform_unix.go:13` 只读 `USER/USERNAME`，无登录环境（systemd / cron / `docker exec` / ssh 命令）为空 → `unknown`；乱码根因是 `builder/implant/main.go:1811`（旧）对**整串**输出做 GBK 转换，而回执是"UTF-8 中文 + GBK 工具输出"的混合串 | 已改：`implant/username.go`（环境链 → `/etc/passwd` → `uid:<n>`）、`platform_windows.go:274 decodeConsoleText`（逐行判 UTF-8，幂等）、`common/encoding/text.go` + `api/output_display.go`（服务端展示漏斗）；**原始结果字节不动**，另增 `GET /tasks/{id}?raw=1` 无损回读。前后对比证据见 CHANGELOG |
+| 3 | **代理创建支持可选认证**（SOCKS5 RFC 1929） | 功能（小） | ✅ 已完成 | `common/tunnel/auth.go`：用户/口令 1~255 字节、禁控制字符、成对校验、常量时间比较；HTTP CONNECT 一并校验 `Proxy-Authorization`（否则 HTTP 路径绕过认证） | 不填认证 = 行为与 v1.4.0 一致（`[05 01 00]`→`05 00`）；填了 → 错口令 `01 01` / HTTP 407；**两条路径都拒绝**；口令不进日志、不回显 |
+| 4 | **文件预览按后缀白名单限制** + 未识别后缀弹窗 + 后端二次校验 | 功能（小） | ✅ 已完成 | `internal/common/preview`：text/image/executable/archive/database/unknown + 阈值（文本 1 MiB、超大回 64 KiB 前缀、未知后缀强制预览 8 KiB、图片 2 MiB、源文件 64 MiB）；`GET /files/preview-policy` 下发清单 | 白名单外 415 且**不建任务**；未识别后缀 409 → 弹窗确认后才能前缀预览；**直接打 API 也拒**；截断显式标 `truncated`；`/files/transfer` 强制 `attachment + nosniff + CSP sandbox` |
+| 5 | **Linux/amd64 植入端"秒断"** | 缺陷修复 | 🟡 部分（代码级缺陷已修；Linux 真机待验证） | 修掉两个真 bug：① `blob_unix.go` 标签与 light 档重复定义 → **linux+light 编译不过**；② 混淆器改写 `const` 字面量 → **全平台构建 500**。另新增构建期拦截 `listenerChannelMismatch`（协议与监听器通道不一致必然"连上即断"）与 `resolveTransport` 单一口径 | 已达成：两类编译失败消失、72 组 tag 矩阵测试、通道不一致构建时 400。**未达成**：本机无 Linux 运行时，"上线即 panic/被杀"证伪不了；需现场日志（`Implant registered` 是否有 / `Connection closed` 原因）才能定论 |
+| 6 | **参考项目分析** `docs/VSHELL-ANALYSIS.md` | 文档 | ✅ 已完成 | 许可证结论：**未声明（README 徽章 All Rights Reserved，`license.txt` 缺失）→ 只吸收设计思想，不复制代码/资源/常量**；含 10 条借鉴、5 条不借鉴、3+3+3 净结论 | 文档入档；`vshell/` 不进 git、不进发布包 |
+| 7 | **文档 / 路线图重写**（本文件 + README/CHANGELOG 口径对齐） | 文档 | ✅ 已完成 | 见本文「技术债」D1~D4 四处过期表述的修正 | 文档内每个 ✅ 都能指到代码/脚本；无"完全免杀"类表述 |
+
+---
+
+## 后续优化清单（按优先级）
+
+> **排序依据**：① 先收口**会影响正确性/可观测性**的小改 → ② 再做**零外部材料依赖**的纯代码项（可并行） → ③ 最后做"**没有操作员材料就无法验收**"的事。
+> 每条四段：**动机 / 验收标准 / 改动面 / 风险**。
+
+### P0（v1.4.1 收口，必做）
+
+#### P0-1 文件预览白名单的"全链路闭环"
+
+- **动机**：预览当前复用下载任务 + 前端二进制猜测（`web/src/components/FileManager.tsx` 的 `previewFile`），既无后缀约束也无服务端裁定；一个"看起来是文本"的 PE 会被当文本塞进 `<pre>`。
+- **验收标准**：① `internal/common/preview` 有表驱动单测（每类 ≥2 后缀）；② 直接 `POST` 预览接口传 `../../etc/passwd` 或白名单外后缀 → 明确拒绝码；③ 未识别后缀前端**必须**弹窗（截图/交互记录）；④ 超大文件只回前缀且 `truncated=true` 可见。
+- **改动面**：`internal/common/preview`（纯逻辑）+ `api/handlers_files.go`（后端二次校验）+ `api/api.go`（policy 路由）+ `web/src/components/FileManager.tsx`。
+- **风险**：① 白名单过窄会让正常运维预览失效（先跟"常用运维后缀"对齐）；② 强制预览走"只读前缀"，别顺手把它做成任意文件读原语（路径必须复用既有校验）。
+
+#### P0-2 代理认证的 fail-closed 复核
+
+- **动机**：同一监听端口同时服务 SOCKS5 与 HTTP CONNECT；只校验 SOCKS5 认证等于给了一条绕过路径。
+- **验收标准**：① 启用认证后，无凭据的 SOCKS5 握手被拒；② 无 `Proxy-Authorization` 的 HTTP CONNECT 被拒（407）；③ 错误口令不写日志原文；④ 不启用认证时与 v1.4.0 行为逐字节一致（含错误码）。
+- **改动面**：`internal/common/tunnel/auth.go` + `tunnel.go` + `api/handlers_tunnels.go` + 前端参数。
+- **风险**：① 常量时间比较要用 `subtle.ConstantTimeCompare`（别用 `==`）；② 认证字段进 DB/配置时要按密文处理（不回显）。
+
+#### P0-3 显示层三处修复的一致性
+
+- **动机**：Linux 用户名 `unknown`、杀软击杀回显、启动项回显三处都是"数据对、显示错"，修法必须统一成"显示层解码"而不是"改原始结果"。
+- **验收标准**：① 原始 `task.output` 与修复前**逐字节一致**（断言用例）；② 前端/日志两处显示正确；③ 非法编码不 panic（退回原样）。
+- **改动面**：`internal/implant/sysinfo/sysinfo.go` + 显示侧（前端渲染或 API 层格式化，二选一并写清）。
+- **风险**：**不要把 GBK→UTF-8 塞回植入端回执**（会污染审计与导出，且与"原始结果不动"的要求冲突）。
+
+#### P0-4 Linux/amd64 "秒断"根因与回归
+
+- **动机**：这是**可用性级**缺陷：平台"支持"但实际连不上，会直接动摇"多平台"这个卖点。
+- **验收标准**：真机 Linux/amd64 上线 ≥10 分钟；一次主动重连；`whoami` + `file_list` 回执；把复现条件写进 `scripts/e2e_smoke.ps1` 的说明（或新增 `linux` 专用冒烟段）。
+- **改动面**：待定位（传输握手/心跳/判活/构建参数四选一），预计 `builder/implant/*` 与 `listener/*` 各一处。
+- **风险**：① 别用"调大超时"掩盖根因；② 修完必须同时在 `internal/server/builder/implant` 与 `release/implant` 两份镜像改（见技术债 T17）。
+
+#### P0-5 文档口径归零
+
+- **动机**：本轮分析发现 4 处"文档说没做、代码其实做了"或"文档说做了、其实没验证"的漂移（D1~D4），继续漂会让路线图失去可信度。
+- **验收标准**：`grep` 三份文档（README/ROADMAP/CHANGELOG）不再出现与代码矛盾的状态词；每个 ✅ 行都有出处。
+- **改动面**：纯文档。
+- **风险**：改状态时**不要把 🟡 扩大成 ✅**（宁严不宽）。
+
+### P1（v1.5：从"能用"到"可运营"）
+
+#### P1-1 通道落点注册表（新协议成本从"12 类落点"降到"1 个适配器"）
+
+- **动机**：ROADMAP 旧版已承认"加一个新协议 = 12 类落点 / 20+ 处编辑，8 处漏改就静默降级或编译失败"；这是 v1.6 冷门通道的最大前置成本。（设计参考：`docs/VSHELL-ANALYSIS.md` B1，只借思想不借代码）
+- **验收标准**：① 新增一张"协议面注册表"（端点集合 + 能力标志 + 编译期常量），现役四通道在注册表里各占一行且行为不变；② 守卫用例断言"注册表 ⊇ 现役端点"且"未知通道 fail-closed"；③ 用注册表**只改 3 处**就能挂一个空实现通道（用于验证抽象是否成立）。
+- **改动面**：`internal/server/listener/*`（新 `protoface.go`）+ `api/router.go` + `internal/common/protocol/packet.go` + 单测。
+- **风险**：① 运行期装配会让"哪些端点存在"变成数据 → 必须同时做**端点自检与探测面核对**（重演 S5 第 0 步的坑）；② 植入端**不要**跟着改成运行期协商（老载荷不兼容）。
+
+#### P1-2 载荷投递面：请求时生成 + 一次性/过期 URL + loader 模板
+
+- **动机**：现在载荷必须"构建 → 落盘 → 手工发下载链接"；演练中途换链接、链接被分析员反复拉取都没有对策。（设计参考：`docs/VSHELL-ANALYSIS.md` B2/B3）
+- **验收标准**：① 同一组构建参数 60s 内复用同一产物（缓存命中日志可查）；② 生成一次性 URL（TTL 可配，默认关闭），过期后明确 410；③ 参数来自 URL 时**只接受枚举值**（架构/档案/通道/格式），非法值 400；④ 每个 loader 模板能在本机 `go build` / `mingw-gcc` 通过。
+- **改动面**：`api/handlers_builders.go` / `handlers_implant.go` + 构建缓存 + 新 `loader_templates/`（`go:embed`）+ 前端按钮。
+- **风险**：① 现场构建是重操作 → 必须限流 + 排队 + 超时，否则一个探测者能打满构建器；② 模板必须**真能编译**（不造空壳，参考 vshell 的空 loader 骨架教训）；③ 缓存要按"参数指纹"而不是"请求 ID"。
+
+#### P1-3 批量操作 + 列表契约统一
+
+- **动机**：横向阶段"一次给 20 台下发同一条侦察命令"现在只能循环调 20 次；列表接口参数各写各的（`/sessions`、`/tasks`、`/plugins` 不一致）。
+- **验收标准**：① 新增 `POST /sessions/bulk`、`POST /tasks/bulk`，返回**逐项**结果（成功/失败原因）；② 部分失败不回滚已成功的项；③ 列表统一 `page/page_size/sort/order/q`（旧参数保留一版别名）；④ 批量操作只写**一条**审计（带目标列表）。
+- **改动面**：`api/router.go` + 各 `handlers_*.go` 列表签名 + 前端表格/工具栏。
+- **风险**：① 批量下发的审批/分级不能绕过（AV-Ops 的 tier 判定必须逐项复用）；② 一次 20 台同时执行会打满服务端 goroutine → 批内并发上限。
+
+#### P1-4 RBAC 骨架（角色 → 路由元数据 → 审计）
+
+- **动机**：JWT `Claims` **已经有 `Role` 字段**（`internal/server/auth/auth.go:18-22`），但登录时固定写死 `"admin"`（`api/handlers_auth.go:140`、`:156`），**全仓库没有任何基于 role 的授权判定** —— 只读观察员与能下 BYOVD 的操作员等价。
+- **验收标准**：① 路由注册处带 `requireRole` 元数据（**不用路径前缀匹配**）；② 3 个内置角色（viewer/operator/admin），viewer 打任何写接口得 403 且进审计；③ 未打元数据的路由默认**拒绝**（fail-closed）并由守卫用例钉住；④ UI 只做"隐藏 + 提示"，服务端判定为准。
+- **改动面**：`api/router.go`（100+ 路由加元数据）+ `auth` + 最小用户表 + 审计字段。
+- **风险**：① **前缀式 RBAC 是反例**（vshell 的 `/api/client/` 前缀把编辑/删除都放行了，见分析文档 N/B9）；② 单账户模型下做角色会暴露"没有用户库"，要一并做最小用户表；③ 别把"前端隐藏按钮"当权限。
+
+#### P1-5 隧道/反代主机实体化 + 健康检查 + 配额
+
+- **动机**：SOCKS5 隧道现在是内存态（`api/handlers_tunnels.go` 的 `s.socks5Servers`），**进程重启即丢**；中继节点无独立健康探测，只能等会话判死。
+- **验收标准**：① 隧道规则入库（幂等 DDL），重启后按规则重建；② 健康探测默认**关闭**，仅对显式开启的规则跑，`tcp/http` 两种检查；③ 连续失败只标 `unhealthy` + 告警，**不自动删规则**；④ 每会话连接数/流量上限超限时回明确错误（不静默丢帧）。
+- **改动面**：`database/`（新表）+ `common/tunnel` + `listener` 健康 goroutine（限并发 20）+ 前端 Tunnels 页。
+- **风险**：① 健康探测 = 新的主动流量足迹（默认关）；② 探测阈值别和会话判活共用（S5 已踩过判活抖动）；③ 配额按"并发流"算，不要按帧数（大文件传输会被误杀）。
+
+#### P1-6 可观测性计数上界面
+
+- **动机**：屏幕流帧限速丢弃数、广播去抖抑制次数、慢消费者丢弃数现在**只在日志里**；`/system/stats` 已存在但缺这些业务指标。
+- **验收标准**：`/system/stats` 增加 3 组计数（frame_dropped / debounce_suppressed / ws_slow_consumer），仪表盘有卡片，计数器不按帧存（防高基数）。
+- **改动面**：`api/screen_frame_limiter.go`、`session_broadcast.go`、`ws_push.go`、`api/api.go`、`web/src/pages/Dashboard.tsx`。
+- **风险**：计数器只增不重置会导致"历史累计"误读 → 同时暴露 `since` 时间戳。
+
+#### P1-7 真机冒烟矩阵脚本化
+
+- **动机**：CI 里的 e2e 固定 `-SkipImplant`（托管 runner 无真实植入端），真机验证完全靠人工记；`docs/EVASION.md` §3.1 的动态测试矩阵还没脚本化。
+- **验收标准**：`scripts/evasion_matrix.ps1`（已存在）补成"一次只改一个变量 + ≥3 次重复 + 记录拦截原文 + 输出判定矩阵"的可重复流程；产物落 `docs/` 附证据。
+- **改动面**：脚本 + 文档。
+- **风险**：**不得**把脚本跑出的"某次通过"写成"免杀已生效"（口径纪律）。
+
+### P2（v1.6：第二植入端 + 冷门通道）
+
+#### P2-1 Rust 第二植入端（结论：可行 · 已实测体积）
+
+- **动机**：Go 版地板已探明（核心标准库 2.01 MB，最小 TCP 栈 ≈2.8 MB），`nano ≤1.8 MB` 在 Go 下不可行。Rust 侧 **v1.4.1 已在本机实测**（探针源码随仓库提供，见 `docs/RUST-IMPLANT.md` 与 `docs/rust-probe/`）：
+  - `light` 等价物（TCP 帧协议 + 注册/心跳 + shell/文件/进程 + SM4-GCM）**350,720 B**，Go 同形态 2,946,805 B → **小 8.4 倍**；
+  - `light + http`：Rust 走 **Windows SChannel** 时 TLS 增量仅 **17,408 B**（总 ≈368 KB），Go 为 5,455,613 B → **小 14.8 倍**；
+  - 若改用 rustls 自带密码学，TLS 增量 +888,320 B（总 ≈1.15 MB），仍比 Go 小 4.4 倍；
+  - `full` 档（含注入/BOF/凭据/驱动）体积为**推导值 650 KB–1 MB**，须在 R4/R5 完成后替换为实测值。
+- **验收标准**：① 能完成"上线 + `whoami`/`file_list`/`file_download` 三类任务"；② `light` 档产物 ≤ 450 KB（`opt-level=z + lto + strip` 已在探针里定死，不开 LTO 会涨 3.7 倍）；③ 与 Go 版**共用协议与配置块格式**（同一服务端无需分支）；④ 明确标注"第二植入端，不替代 Go 版"（能力子集），UI 按能力位图自动灰掉未实现项。
+- **改动面**：新 `implant-rs/`（协议/配置块/传输/TLS）+ 构建器加 `language` 分支 + CI 交叉编译矩阵；服务端与前端**几乎不用改**（线协议、配置块、能力位图都是语言无关的 JSON）。
+- **风险**：① 成本被低估：TLS/JSON/协议帧/配置块/PE 资源修补都要重写一遍，**60~70% 的 Go 版工作量**是乐观值，实测工程量约 13,000~15,000 行 Rust；② 双植入端 = 双倍回归面（必须共用协议单测向量 + "Go 产物 ↔ Rust 产物打同一服务端"的双向互通回归）；③ 别为了体积牺牲"能力位图/exec_module"这些已有契约；④ **小体积 ≠ 免杀**，R1 阶段就要做一次"落地/动态/静态"三分类体检并入 `docs/EVASION.md`。
+
+#### P2-2 冷门通道（DNS/DoH 优先，需 P1-1 前置）
+
+- **动机**：现有通道在"仅放行 DNS/443 CDN"的出口里全军覆没；DNS 通道是穿透性最好的一档。
+- **验收标准**：真实域名 + 委派下，DNS 通道能跑"心跳 + 一条命令 + 小结果"；吞吐/延迟有实测数字（并写明"只适合控制面"）。
+- **改动面**：新 listener + 植入端适配器（依赖 P1-1 注册表）。
+- **风险**：① 需要**域名与委派运维**（外部材料）；② 吞吐极低（`MaxDNSsize` 级别）；③ 企业 DNS 日志/NRDS 让隐蔽性远低于直觉 —— **禁止**写"绕过出口管控"。
+
+#### P2-3 平台工具库与远程加载（`data/tools/`）
+
+- **动机**：植入端体积/功能面不随能力增长；高阶能力（端口扫描/横向/凭据利用）不该编进载荷。
+- **验收标准**：`data/tools/<os>/<arch>/` + `manifest.json`（用途/平台/调用示例/来源/SHA-256/许可/体积/校验时间）；"下载→校验→内存加载→执行→回传→清理"闭环跑通；元数据缺失或 sha256 不符**明确拒绝**。
+- **改动面**：新工具库 + `api` 远程下载 + `exec_module`/`blob` 复用。
+- **风险**：第三方二进制的**来源与许可**是运营问题（预置只放自研脚本）；下载源必须是白名单 + 哈希固定。
+
+#### P2-4 落地链与真实证书验收（材料依赖）
+
+- **动机**：S3 的全部结论目前只有静态/结构级证据；本机连新生成 PE 都执行不了。
+- **验收标准**：目标机上给出"签名载荷可执行 / 白加黑链可执行"的**实测记录**；干净 VM（仅 Defender）里默认载荷 5 分钟内不触发 `Behavior:` 类拦截；判定矩阵能输出"被拦层级 → 改造类别"。
+- **改动面**：脚本 + 文档；代码改动取决于实测结论。
+- **风险**：**没有材料就写不出结论** —— 这一项要明确标注"阻塞在操作员提供证书/目标机"，不许用"理论可行"充数。
+
+#### P2-5 AV-Ops L2/L3 真机验证
+
+- **动机**：L2/L3 只验证过"被拒"，没验证过"放行后真的执行"；L3 还依赖操作员自备 `rw` 档驱动。
+- **验收标准**：授权 VM + 快照下，`process_kill`（L2）与 `byovd_kill`/`ppl_kill`（L3）各留一条**真机执行记录**（命中 EPROCESS/Protection 原值→新值）；面板"破坏性动作成功下发"分支实测一次。
+- **改动面**：代码基本不动（补 `purpose` 选路提示与失败原因），主要是验证与文档。
+- **风险**：爆炸半径最大 → 仅授权实验环境 + 快照 + 操作员自备驱动；**项目不内置任何 `.sys`**。
+
+### P3（v2.0 / 长期）
+
+#### P3-1 插件市场：清单 + 签名 + 索引
+- **动机**：`plugins/` 是本机目录 + `exec_module` 只做 sha256 硬拦；社区分享没有信任模型。
+- **验收标准**：Ed25519 签名（可开关）→ 未签名模块默认拒装；索引文件带版本/兼容 ABI/作者；至少 3 个官方示例模块 + 1 个第三方模块通过校验。
+- **改动面**：`internal/server/plugin` + `modules/manifest.go` + 前端 Plugins 页。
+- **风险**：签名私钥的分发与轮换；别把"签名"当"安全"（恶意但已签名照样能跑）。
+
+#### P3-2 OpenAPI 导出 + Go/TS/Python client
+- **动机**：现在生态靠 `docs/skills/toshell-api/SKILL.md` 人工维护（109 条路由），脚本党只能抄文档。
+- **验收标准**：`GET /api/v1/openapi.json` 可下载且通过 schema 校验；从它生成的 TS client 能 `tsc --noEmit`、Python client 能跑通 `session_list`；OpenAPI 由注册表生成（不手写）。
+- **改动面**：`api/router.go` 元数据 + 生成器 + `sdk/` 目录。
+- **风险**：路由元数据不全是"防漂移"的关键（与 P1-4 共用同一份元数据）。
+
+#### P3-3 多实例联邦 / 多级 team server（先只读）
+- **动机**：现在严格单实例（每实例独立 sqlite、独立 MCP 监听）；多团队/多级场景只能靠人工汇总。
+- **验收标准**：两个实例互见"对端在线数/会话数/健康"，**断链不清空本地数据**；只读镜像，不做双向写。
+- **改动面**：新 `federation` 子系统 + 鉴权（独立 token）+ 前端"对端"卡片。
+- **风险**：双向写 = 分布式一致性地狱（明确不做）；对端信任模型要单独设计。
+
+#### P3-4 工程证据链：SBOM / 依赖审计 / Fuzz / 基准 / 可复现
+- **验收标准**：SBOM（CycloneDX）随 Release 发布；`govulncheck` 0 critical；协议解析与 `preview`/`moduleabi` 有 Fuzz 目标（≥1 万次执行无 panic）；关键路径 bench 基线入 CI；`-trimpath` + 固定工具链 + 依赖锁定 → 两次构建 SHA-256 一致。
+- **改动面**：workflows + `scripts/` + `*_fuzz_test.go`。
+- **风险**：可复现构建与 `-buildid=` 擦除/UPX 的顺序冲突要一起设计（现在顺序契约在 `finalize_order.go`）。
+
+#### P3-5 服务端自更新（服务化守护 → 原子替换 → 回滚）
+- **动机**：现在升级 = 停进程覆文件重启，期间**全部会话与 SOCKS5 隧道断开**。
+- **验收标准**：装成服务（Windows 服务/systemd）→ 检查更新 → 校验（sha256 + 可选 Authenticode）→ 原子替换 → 重启 → 自检；失败**不改动现有二进制**；保留上一版一键回滚；默认**关闭**。
+- **改动面**：`release/install.*` + 更新器 + 设置页。
+- **风险**：更新通道 = 完整 C2 控制端，**被劫持等于 C2 被接管** → 必须可信源白名单 + 独立密钥 + 二次确认 + 审计。
+
+#### P3-6 产品体验：i18n 补全 / 无障碍 / 移动端
+- **动机**：`web/src/i18n.ts` 已有 zh/en 字典骨架，但页面文案**迁移未完成**；窄屏只做到"能用"。
+- **验收标准**：主要页面文案走 i18n key（无硬编码中文）；键盘可完成"登录→切会话→下发命令→看结果"；无障碍基线（对比度/焦点环/aria-live）；移动端只承诺"能看会话与任务，不做全功能"。
+- **改动面**：前端为主。
+- **风险**：全站 i18n 是大工程 → 按页面分批，不做一次性替换。
+
+---
+
+## 生态与"跟上时代"
+
+> 这一节只写**可执行**的东西：每条都带"现在有什么 / 缺什么 / 怎么验收"。空口号不写。
+
+### 6.1 互操作与生态
+
+| 方向 | 现状（依据） | 缺口 | 里程碑 |
+|---|---|---|---|
+| **MCP** | `internal/server/mcp`：38 工具三档分级、JSONL 审计、RPM/并发/句柄三闸、默认关闭且**独立监听** `mcp.bind`（默认 `127.0.0.1:18082`，`mcp/server.go`）；`cmd/toshell-mcp` 提供 stdio 桥 | ① 没有"AI 客户端接入指南 + 真实客户端冒烟"；② stdio 桥没有一行安装；③ 工具面**故意**不含 `exec_module` 与 L1+ 动作 | `scripts/mcp_client_smoke.ps1`：stdio + HTTP 两种传输各跑 `session_list`/`task_wait`；文档补"3 个客户端（Claude Desktop/Cursor/自研脚本）配置片段" |
+| **API / SDK** | REST 109 条路由（`docs/skills/toshell-api/SKILL.md` 逐条列出）；无 OpenAPI（`grep -i openapi` = 0 命中） | OpenAPI 导出、代码生成、版本化策略 | P3-2：`/openapi.json` + TS client 通过 `tsc --noEmit` |
+| **Webhook / 告警** | 飞书/钉钉/企业微信/Slack/Discord 各自结构 + 业务码判定（`internal/server/webhook/`）+ `POST /settings/webhook/test` | 告警分级、去重、静默窗口、失败重试 | `alert_rules.yaml`：事件类型 → 渠道 → 静默期；一次演练只发 1 条聚合告警 |
+| **插件市场 / 签名** | `plugins/` 本地目录 + `exec_module` 清单 sha256 硬拦 + 一次性 token + 9 步校验链 | 签名、索引、兼容 ABI 声明 | P3-1 |
+| **导入导出与迁移** | 单 sqlite + 幂等 DDL（`database/agent_schema.go`）；无 `schema_version` 表 | 会话/情报/模板/剧本的 JSON 导入导出；迁移脚本 | `toshell-migrate` 子命令 + `schema_version` + 备份/回滚说明 |
+| **多实例联邦** | 严格单实例（每实例独立 DB + 独立 MCP 监听） | 只读镜像、对端健康、断链保护 | P3-3 |
+
+**MCP 怎么"真的用起来"（三条具体动作）**：
+1. **给 AI 客户端一段可复制的配置**：`mcp.enabled=true` + token + `allowed_tools`（只读起步），文档里贴 Claude Desktop 的 `mcpServers` 片段。
+2. **把"危险工具"做成显式开关而不是默认**：`allowed_tools` 留空 = 只读（现状已如此），写工具名才逐项放行；每加一个工具必须在 `registry_tools.go` 里分级，并有守卫用例防"忘了分级就默认放行"。
+3. **让人能审计 AI 做了什么**：`audit_path` 的 JSONL 要能被"按 run/按会话"聚合查询（现在只能 grep），并在 UI 的 Logs 页给出过滤入口。
+
+### 6.2 对抗面（如实标状态，不吹能力）
+
+| 手段 | 状态 | 说明 / 边界 |
+|---|---|---|
+| HTTP(S) 回连 | ✅ | 四种通道之一；证书/SNI 可配（`front_domain`） |
+| wss | ✅ | WS 通道可用；WS 走 Go 标准库 TLS |
+| HTTP/2 | ❌ | **未做协商验证**：没有 h2 相关代码/测试，文档不得宣称支持 |
+| uTLS / JA3 | ⚠️ | HTTP 全量档已接 uTLS `HelloChrome_102`（`transport_tls_utls.go`），**未抓包验证** JA3 指纹与真实 CDN 行为；light 档仍用标准库 |
+| 域前置（Domain Fronting） | 🟡 | HTTP/WS 已支持"SNI + Host 分离"（`front_domain`）+ WS Host 名单；**真实 CDN/证书链未联调**（`docs/DEPLOY-DOMAIN-CDN.md` 只有配置与排错） |
+| CDN 回连 | 🟡 | 文档齐全、配置可用；无真实 CDN 环境实测记录 |
+| 加载器（loader / stager） | 🟡 | 8 条链命令模板 + 降级顺序；**无 stage/stageless 双形态、无 loader 源码模板**（P1-2） |
+| BOF / COFF | ✅ | `-tags bof` 按需编译，默认载荷不含 `Beacon*`；`internal/implant/bof.go` 自带 COFF 解析 |
+| .NET 内存加载 | ❌ | 无实现；只在 `exe_mem` 预检里识别 `.NET` 并**拒绝**（避免双 runtime） |
+| 反射 DLL | 🟡 | `format=dll` 产出**真 DLL**（c-shared，加载即启动）；内存路径是反射映射宿主，但 `dll` 分支**未真机验证** |
+| 静态降特征 | ✅ | 字符串混淆 + pclntab 中性化 + Go 指纹擦除 + PE 资源/节规范化 + 每构建随机化 |
+| 睡眠期内存加密（sleep mask） | ⚠️ | 已实现（隧道子密钥 + 结果缓存），**运行期零实测**；C2 地址等 `string` 未纳入 |
+| 去 RWX | ✅ | `allocRW`/`protectRX` 硬拒 `PAGE_EXECUTE_READWRITE`；默认载荷 `PAGE_EXECUTE_READWRITE=0` |
+| 直接系统调用 | ✅ | 注入路径 `directsyscall_windows_amd64*.go`；cgo 共享库（DLL）构建时回退 apihash |
+| **inline hook** | 🚫 | **明确不做**（`mexecguard_windows.go` 注释给出理由：搬运被覆盖函数序言，失败模式是"全进程变砖"） |
+| ETW patch | 🟡 | `edr_blind` 任务级（需管理员），**不是启动期自动**；存在"需要先有权限才能降检测"的鸡生蛋问题 |
+| AMSI patch | 🚫 | 对 Go 默认载荷收益≈0（只在进程内加载 .NET/脚本时才有意义）；不排期 |
+
+**免杀三层的说法必须固定**（避免混用）：**落地（delivery）** = 怎么送上目标机；**动态免杀** = 运行时内存与调用行为；**静态降特征** = 文件里的字符串/符号/构建指纹。三层各自有验证口径，`docs/EVASION.md` 是唯一权威表。
+
+### 6.3 平台覆盖（以及为什么某些不做）
+
+| 平台 | 架构 | 状态 | 说明 |
+|---|---|---|---|
+| Windows | amd64 / 386 | ✅ | 主力平台；全功能（注入/BYOVD/屏幕/凭据/UAC/持久化） |
+| Windows | arm64 | ⚠️ | 构建矩阵里有（`GetSupportedArch`），**无真机验证**；注入/驱动等能力未适配 |
+| Linux | amd64 | 🟡 | 基础任务可用（v1.4.1 正在修"秒断"）；无屏幕流/无注入 |
+| Linux | arm64 | ⚠️ | 可构建，未真机验证 |
+| macOS | amd64 / arm64 | 🟡 | 可构建（`GetSupportedOS` 含 darwin），但**无签名/公证、无屏幕录制授权路径、无真机验证** |
+| Windows | 386 载荷 / WoW64 边界 | 🟡 | 32 位载荷能在 64 位系统上跑（已实测 386 全链路），但 32 位载荷做 64 位目标的注入/驱动交互有已知边界（见 `docs/EVASION.md`） |
+| Android / iOS | — | 🚫 | 不做：授权形态不同、无越狱/root 前提下的能力为零、体积与维护成本溢出 |
+| 固件 / IoT | — | 🚫 | 不做：威胁模型与协议栈完全不同（MIPS/RTOS），投在这里会拖垮主线 |
+
+### 6.4 工程化
+
+| 项 | 现状 | 缺口 / 里程碑 |
+|---|---|---|
+| CI/CD | `.github/workflows/ci.yml`（web build → server build → vet → test）+ `release.yml`（e2e-smoke 门禁 → 三平台打包 → tag/版本一致性 → zip 清单 → checksums） | 缺**覆盖率门槛**与"测试包数量"趋势；里程碑：覆盖率报告随 PR 评论 |
+| 可复现构建 | `-trimpath` + `-buildid=` 擦除 + 固定植入端工具链（go1.20.14，`release.yml` 预取） | 缺 vendor 与"两次构建 SHA-256 一致"的自动化断言；里程碑：`scripts/repro_check.ps1` |
+| SBOM | 仅有 `THIRD-PARTY-NOTICES.md`（人工维护） | CycloneDX + 随 Release 发布（P3-4） |
+| 依赖审计 | 无自动化 | `govulncheck` 进 CI，critical 即失败（P3-4） |
+| Fuzz | 无 | 协议解析（`internal/server/listener/listener.go` 的 `parsePacket`/`parseTunnelPacket`）、`preview`、`moduleabi` 三个目标（P3-4） |
+| 基准性能 | 无 | 关键路径 bench（帧编解码、分块落盘、SSE 推送）+ CI 基线 |
+| 灰度 / 回滚 | 无（升级=停进程覆文件） | 自更新（P3-5）+ "保留上一版二进制"约定 |
+| 迁移脚本 | 只有幂等 DDL | `schema_version` + 迁移命令 |
+| 可观测性 | `/health`、`/logs`、`/system/stats`、`/channels/health` | metrics 端点（Prometheus 文本格式）+ trace 关联（agent trace 已有，HTTP 侧待统一） |
+| 多租户 / RBAC | 无租户；RBAC 仅"有 role 字段无判定" | P1-4（RBAC）；多租户**明确不做**（单团队使用为主，租户隔离会把每条查询都复杂化） |
+
+### 6.5 产品体验
+
+- **Copilot 自主性（✅ 已做 agent loop）**：`max_turns=20` / `max_tool_calls=40` / `max_wallclock_sec=900`、防死循环（`loop_detected`）、审批分级、SSE 断点续传、长任务挂起/恢复。**剩余**：多 run 并行（同一服务端同时跑两个不同目标的 run）、"下一步建议"的确定性剧本化（减少模型自由发挥）。
+- **任务编排**：剧本（playbook）已有；缺"可视化编排 + 失败分支 + 重试策略"。
+- **批量操作**：P1-3。
+- **UI 一致性**：组件层已建（`web/src/components/ui`）；缺"新页面必须复用组件"的 lint/清单。
+- **i18n**：`web/src/i18n.ts` 有 zh/en 字典骨架，页面文案迁移未完成（P3-6）。
+- **无障碍**：焦点环与键盘导航已做（会话详情 tab 条 ←/→/Home/End）；缺对比度与 `aria-live` 审计。
+- **移动端**：窄屏浮层已做；明确只承诺"看会话/任务"，不做全功能（P3-6）。
+
+### 6.6 合规与安全（产品化必须补的）
+
+| 项 | 现状 | 要做 |
+|---|---|---|
+| 审计日志 | MCP JSONL + AV-Ops 审计 + agent 轨迹（`internal/server/mcp/audit.go`、`handlers_avops.go`） | 统一审计查询 API（按会话/时间/操作者）+ 保留策略配置 |
+| 密钥管理 | 配置明文（`configs/server.yaml`），有"凭据必须落盘否则拒启"的保护 | 可选 KMS/HSM 或至少"环境变量/文件权限"两种加载方式；密钥轮换流程文档 |
+| 数据保留 | 结果外置有 `result_ttl`（默认 24h） | 会话/任务/日志的 TTL 与"演练结束清理"一键命令 |
+| 生产部署加固 | TLS 可配、`trust_proxy_headers` 默认 false、Web 防测绘门槛（`/__gate`） | 反代样例（nginx/caddy）+ 隔离网段部署说明 + 默认口令强度检查 |
+
+### 6.7 如何领先同类型项目：5 条护城河 + 可度量里程碑
+
+| # | 护城河 | 为什么是我们（而不是别人） | 可度量里程碑 |
+|---|---|---|---|
+| 1 | **AI 原生操作员** | 工具表单一来源（REST / 内置 AI / 对外 MCP 三处同源）+ 分级审批 + 长任务可靠性；同类项目多为"面板 + 按钮" | 一条自然语言指令完成"侦察 → 汇报 → 建议"且**全程可回放**（SSE 事件 + 审计）；MCP 客户端冒烟 3/3 通过 |
+| 2 | **可验证的对抗分级** | AV-Ops 把"对抗动作"分级并**逐动作回显能不能下发 + 中文原因**，被拒动作**不产生任务**；工具面不暴露 L1+ | L0~L3 每档各一条真机执行记录；拒绝路径 100% 有审计；"点击无反应"的假入口数 = 0 |
+| 3 | **完整证据链** | 每个 ✅ 都能指到测试/脚本；体积、节表、loader 接受性都有口径（含"未验证"标注） | 状态表 100% 条目有出处；覆盖率报告 + bench 基线进 CI；两次构建 SHA-256 一致 |
+| 4 | **开源可审计** | MIT、不内置驱动/二进制、第三方声明齐、fail-closed 默认值 | SBOM 随 Release；`govulncheck` 0 critical；`THIRD-PARTY-NOTICES.md` 与依赖树 100% 对齐 |
+| 5 | **插件生态（会签名、有 ABI）** | `exec_module` ABI v1 + 一次性 token + 9 步校验链；插件可服务端更新而不重编载荷 | 3 个官方示例模块 + 1 个第三方模块通过签名校验；插件 CRUD 与兼容矩阵进文档 |
+
+> **不做的"领先"**：不比"能不能过某杀软"（不可验证、不做承诺）、不比"协议数量"（多通道是成本不是勋章）、不比"UI 花哨"。
+
+---
+
+## 技术债与已知边界
+
+> 逐条都能在仓库里找到依据（代码注释/文档/stub）。**未验证 ≠ 已完成**；这一节是"我们欠自己的账"。
+
+| # | 边界 / 债务 | 依据 | 影响 | 处置 |
+|---|---|---|---|---|
+| T1 | 真实证书链未落地（只有自签实测） | `builder/sign.go` + 无证书材料 | 装 360/电脑管家的主机上未签名 PE **进程创建即被拒** | 材料依赖（P2-4） |
+| T2 | 真实 CDN 域前置未联调（含 wss 证书链） | `docs/DEPLOY-DOMAIN-CDN.md` 只有配置与排错 | 域前置在真实链路上可能失败且无记录 | 材料依赖 |
+| T3 | uTLS/JA3 未抓包验证 | `transport_tls_utls.go` 已实现，无验证记录 | "用了 uTLS"≠"指纹像 Chrome" | P2-4 顺带做 |
+| T4 | HTTP/2 **是否有协商**未验证 | 无 h2 相关代码/测试 | 文档不得宣称支持 | 先验证再写 |
+| T5 | AV-Ops L2/L3 放行路径零实测；L4 无动作 | `avops` 表 + `TierL4.Implemented=false` | 面板能点但没真机证明 | P2-5 |
+| T6 | 真实 `.sys` 加载未真机验证 | `drivers/` 只做校验与选路 | 驱动路线未闭环 | P2-5 |
+| T7 | **inline hook 未做**（IAT 单层） | `mexecguard_windows.go` 注释明确"不做" | 运行期解析地址裸调/静态链入的退出调用拦不到 | 🚫 定论不做 |
+| T8 | 无控制台启动时抓不到 stdout | 结果里会写"未捕获到任何内容（可能原因…）" | WMI/服务拉起的宿主拿不到输出 | 文档化；后续可考虑管道重定向 |
+| T9 | `dll` 内存执行分支未真机验证 | 宿主线程同步执行被映射代码 | 该分支可能带走宿主线程 | 待真机 |
+| T10 | `blob_windows.go` 注释声称"判定栈上镜像帧"，实现里没有 | `blob_windows.go` 的注释指向 `mexecguard_windows.go`，后者只做 IAT | 误导后续维护 | 改注释（文档债） |
+| T11 | `nano ≤1.8 MB` 在 Go 下不可行 | 核心标准库地板 2.01 MB（下表） | 只能靠第二植入端（Rust） | 🚫 定论不做（Go 侧） |
+| T12 | `light ≤2.4 MB` / `full ≤3.2 MB` 未达成 | 实测 2.95 MB / 3.52 MB | 体积目标需重定或靠 stdlib 瘦身 | 重定目标（P2-1 后一起评） |
+| T13 | `tasks.output` 入库截断 500 字节 | `database/database.go:344`（`truncateTaskContent(..., 500)`） | 重启恢复后的结果长度受限 | 提高上限或改外置（v1.5 后单独评估） |
+| T14 | `data/tools/` 空 | 目录只有 `.gitkeep` | 远程加载无载体 | P2-3 |
+| T15 | `exec_module`：仅 TCP 真机 / 单帧 4 MiB 无分块 / 未暴露工具面 | `handlers_modules.go`、`modules/` | 大模块下发受限；AI 无法自主用 | 分块 + 工具面（需先解决"谁批准的"） |
+| T16 | 屏幕流 unix 全 stub | `screen_stream_unix.go` 直接返回 "only supported on Windows" | Linux/macOS 无屏幕能力 | P2-4 类真机依赖 |
+| T17 | 植入端**两份镜像**（`internal/server/builder/implant` 与 `release/implant`）靠人工 SHA-256 比对 | 两目录内容重复 | 改动漏同步 = 发布版与源码不一致 | 加 CI 一致性校验（P0-4/P1-7） |
+| T18 | `go test -race` 在 windows/386 不可用（`CGO_ENABLED=0`） | 本机环境约束 | 并发缺陷只能靠顺序用例兜 | 记录在 CHANGELOG；CI 上跑 linux/amd64 的 race |
+| T19 | `listener.ws_path` / `ws_host_allowlist` 是**全局配置**，WS 监听器共用 | `config.go` 注释明确 | 多监听器共用同一路径策略 | per-listener 覆盖（v1.5 后） |
+| T20 | `docs/plan/*.md` 不入库（本地方案文档） | `.gitignore` 忽略 `docs/plan/` | 外部无法复核早期方案 | 保留（避免泄露内部计划） |
+
+**本次核实到的 4 处「文档说过头 / 已过期」（已在本文件修正，原始证据见 `docs/VSHELL-ANALYSIS.md` §6）**：
+
+| # | 原表述 | 代码事实 | 本文件处理 |
+|---|---|---|---|
+| D1 | "uTLS/JA3 **未开工**"（S5 延伸） | `transport_tls_utls.go` 已实现（`HelloChrome_102`，utls v1.4.0，仅 full 档 HTTP） | 改为 ⚠️「已实现未验证」 |
+| D2 | "发版门禁接进 CI ❌ 未做" | `release.yml` 已有 `e2e-smoke` job，且发布 job `needs: [web, e2e-smoke]` | 改为 ✅（并注明托管 runner 固定 `-SkipImplant`） |
+| D3 | "缺陷①/② ❌ 未开工" | `09e3bbe` / `9c98599` 已修，回归用例在 `ai/parallel_tool_calls_test.go` | 改为 ✅ 并归档 |
+| D4 | "WS 拟态不反代，只回 404" | HTTP 监听器已支持 `mimicry_site` 反代 + `mimicry_profile` 响应整形；WS 侧确实只 404 | 分开写：HTTP 🟡 / WS ❌ |
+
+---
+
+## 附 A：体积矩阵（v1.4.0 本机实测）
+
+**口径**：`windows / 386`、`exe`、植入端工具链 **Go 1.20.14**、**不启用** garble / UPX / BOF / `evasionscan`；按 1 MB = 10⁶ 字节计。构建参数：`-s -w -buildid= -trimpath -H windowsgui`。本次由构建器逐档直接构建，与 `scripts/pe_footprint.ps1` 同一套口径。
+
+| 变体 | 字节 | 相对 `light`+tcp | 说明 |
+|---|---|---|---|
+| 空程序（Go runtime 地板） | 801,280 | — | **0.80 MB 地板** |
+| 空程序 + `net`+`json`+`fmt`+`os`+`time` | 2,010,624 | — | **核心标准库地板 2.01 MB**（已超 nano 目标 1.8 MB） |
+| **`light` + tcp** | **2,946,805**（≈2.81 MB） | 基准 | 最小可用档 |
+| `light` + tcp + **`execmodule`** | 2,973,941 | **+27,136** | 内存模块门控的代价 |
+| `light` + tcp + `evasionscan` | 2,953,973〔换算〕 | +7,168 | 杀软进程枚举（默认关） |
+| **`full` + tcp** | 3,522,293（≈3.36 MB） | **+575,488** | 全部 Windows 可选功能 tag 之和 |
+| `light` + **http** | 5,455,613 | **+2,508,808** | 引入 `net/http` + `crypto/tls` + uTLS |
+| `light` + **websocket** | 5,097,728 | +2,150,923 | 再叠 gorilla/websocket |
+| `light` + **mqtt** | 5,399,798 | +2,452,993 | 再叠 MQTT 库 |
+| `full` + mqtt | 5,975,286〔换算〕 | +3,026,433 | 最重组合 |
+
+**工具链与交叉编译说明**：
+
+- **服务端**：当前仓库 `go.mod` 为 `go 1.25.0`，用本机 Go 直接编译；`-tags webui` 才内嵌控制台（`cmd/server/embed*.go`）。
+- **植入端**：模板锁定 **go1.20 工具链**（构建时自动取对应版本；`release.yml` 会预取 **go1.20.14**），以便在较老 Windows 上运行；`full` 档 HTTP 通道依赖 `refraction-networking/utls v1.4.0`，`websocket` 档依赖 `gorilla/websocket v1.5.0`（见 `release/implant/go.mod`）。
+- **C 植入端**：需与目标架构一致的 mingw-w64 gcc（缺则构建明确报错，而不是产出错架构产物）；`format=dll` 走 `-buildmode=c-shared`。
+- **口径提醒**：表中标〔换算〕的两行（`light`+`evasionscan`、`full`+`mqtt`）未随发布版重测，绝对值按"发布版基准 + 同迭代早期实测增量"换算，只作量级参考；**绝对体积一律以本表为准**，CHANGELOG 只记相对增量。
+
+**结论（如实）**：
+
+1. 体积大头是**传输栈**（http/ws/mqtt 各 +2.15~2.51 MB），比所有功能 tag 加起来（+0.58 MB）大一个量级 → **要小就留在 tcp 档**。
+2. `exec_module` 买到的是"**最小载荷 + 按需全功能 + 模块可服务端更新**"，**不是**把 2.8 MB 压到 1 MB 级。
+3. `nano ≤1.8 MB` 在 Go 下**做不到**（核心标准库地板 2.01 MB）；要碰 200 KB~1 MB 只能**第二植入端**（Rust，见 P2-1）。
+
+---
+
+## 附 B：文档纪律（每次发版前自查）
+
+1. **状态只在「状态总览」判一次**：其他章节只写方案与证据，不另判状态（避免两处矛盾）。
+2. **✅ 必须有出处**：测试名、脚本输出、真机记录，三者之一。
+3. **⚠️ 必须写清缺哪种验证**（不是"待验证"三个字）。
+4. **禁止表述**：「完全免杀」「绕过所有 EDR」「100% 免杀」「一定能过 X」。
+5. **改动 `internal/server/builder/implant/*` 时同步 `release/implant/*`**，并在提交信息里写明两份镜像的 SHA-256 一致性检查结果。
+6. **发版前三件事**：`go build ./...` / `go vet ./internal/server/...`（与 CI 同口径）/ `go test ./...` 全绿；`scripts/e2e_smoke.ps1` 无 ❌；`scripts/mcp_smoke.ps1` 全过（若改了 MCP 面）。
+
+---
+
+**© 2026 ToShell · MIT License** · 仅供授权测试与学习研究

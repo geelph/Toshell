@@ -1,11 +1,16 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import {
   RefreshCw, Eye, Download, Upload, X, ChevronRight, ChevronDown,
-  Folder, FolderOpen, File as FileIcon, Home, Edit3
+  Folder, FolderOpen, File as FileIcon, Home, Edit3, AlertTriangle
 } from 'lucide-react'
 import { sessionApi } from '../api'
+import type { PreviewFileError } from '../api'
 import type { Session } from '../types'
 import { getSessionState, updateSessionState } from '../stores/sessionState'
+import {
+  decidePreview, ensurePreviewPolicy, getPreviewPolicy, humanBytes,
+  type PreviewCategory, type PreviewDecision, type PreviewPolicy,
+} from '../utils/previewPolicy'
 
 interface FileItem { name: string; size: number; isDir: boolean; modTime: string }
 
@@ -78,6 +83,41 @@ function blobToBase64(blob: Blob): Promise<string> {
     reader.onerror = () => reject(reader.error)
     reader.readAsDataURL(blob)
   })
+}
+
+function base64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64)
+  const out = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
+  return out
+}
+
+// 前端兜底二进制探测（服务端已做二次校验；这里只防老服务端/异常响应）。
+function isMostlyBinary(bytes: Uint8Array): boolean {
+  const n = Math.min(bytes.length, 2048)
+  if (n === 0) return false
+  let bad = 0
+  for (let i = 0; i < n; i++) {
+    const c = bytes[i]
+    // 允许 TAB/LF/CR/ESC（ESC 常见于 ANSI 彩色日志）
+    if (c === 0 || c < 9 || (c > 13 && c < 32 && c !== 27) || c === 127) bad++
+  }
+  return bad * 10 > n
+}
+
+// 预览失败/需要确认时的弹窗（不再用 alert 静默吞掉原因）。
+interface PreviewNotice {
+  title: string
+  message: string
+  node: FileNode
+  /** true = 未识别后缀，弹窗给"仍要预览（前 N KB，只读）"选项 */
+  confirmForce?: boolean
+  /** true = 黑名单/超大/二进制，只给下载 */
+  downloadOnly?: boolean
+  /** confirmForce 时可预览的前缀字节数 */
+  limitBytes?: number
+  /** 服务端返回的机器可读错误码（展示用，便于排障） */
+  code?: string
 }
 
 // ============ TreeNode ============
@@ -311,11 +351,19 @@ export function FileManager({ session }: { session: Session }) {
   const [loading, setLoading] = useState(false)
   const [loadingPaths, setLoadingPaths] = useState<Set<string>>(new Set())
   const [previewContent, setPreviewContent] = useState<string | null>(null)
+  // 图片预览用 data URL（MIME 由服务端按内容签名给，绝不按后缀猜）
+  const [previewImage, setPreviewImage] = useState<string | null>(null)
   const [previewName, setPreviewName] = useState('')
   const [previewSize, setPreviewSize] = useState(0)
   const [previewTruncated, setPreviewTruncated] = useState(false)
+  const [previewLimit, setPreviewLimit] = useState(0)
+  const [previewCategory, setPreviewCategory] = useState<PreviewCategory | null>(null)
+  // true = 未识别后缀的强制预览（只读，不允许编辑覆盖）
+  const [previewReadOnly, setPreviewReadOnly] = useState(false)
+  const [previewNotice, setPreviewNotice] = useState<PreviewNotice | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewPath, setPreviewPath] = useState('')
+  const [policy, setPolicy] = useState<PreviewPolicy>(() => getPreviewPolicy())
   const [editing, setEditing] = useState(false)
   const [draftContent, setDraftContent] = useState('')
   const [saving, setSaving] = useState(false)
@@ -349,6 +397,13 @@ export function FileManager({ session }: { session: Session }) {
     const h = () => setContextMenu(null)
     document.addEventListener('click', h)
     return () => document.removeEventListener('click', h)
+  }, [])
+
+  // 文件预览规则以服务端为准（拿不到时用 utils/previewPolicy.ts 的内置兜底）
+  useEffect(() => {
+    let alive = true
+    ensurePreviewPolicy().then((p) => { if (alive) setPolicy(p) }).catch(() => { /* ignore */ })
+    return () => { alive = false }
   }, [])
 
   // ----- poll / parse -----
@@ -469,46 +524,172 @@ export function FileManager({ session }: { session: Session }) {
 
   // ----- file operations -----
 
-  const previewFile = useCallback(async (node: FileNode) => {
-    if (node.isDir) return
-    setPreviewLoading(true)
-    setPreviewName(node.name)
-    setPreviewPath(node.path)
+  const closePreview = useCallback(() => {
+    setPreviewContent(null)
+    setPreviewImage(null)
+    setPreviewName('')
+    setPreviewPath('')
+    setPreviewSize(0)
+    setPreviewTruncated(false)
+    setPreviewLimit(0)
+    setPreviewCategory(null)
+    setPreviewReadOnly(false)
     setEditing(false)
+    setPreviewLoading(false)
+  }, [])
+
+  // 老服务端没有 /files/preview 接口时的回退：沿用下载任务 + 前端判定，
+  // 但仍然给出明确的弹窗（不再把 "[二进制文件，无法预览]" 当正文静默显示）。
+  const legacyPreviewFile = useCallback(async (node: FileNode) => {
     try {
       const r = await sessionApi.downloadFile(session.id, node.path)
       if (r?.data?.task_id) {
         const p = await pollTask(r.data.task_id, 600)
-        if (p?.error) { alert('预览失败: ' + p.error); return }
+        if (p?.error) {
+          setPreviewNotice({ title: '预览失败', message: p.error, node, downloadOnly: true, code: 'preview_failed' })
+          return
+        }
         if (p?.output) {
-          // 大文件直传模式:提示改用下载
+          // 大文件直传模式：只提示改用下载（与现状一致）
           if (p.output.trim().startsWith('{') && p.output.includes('transfer_id')) {
-            setPreviewContent('[文件较大,已转服务端存储,请使用「下载」查看]')
+            setPreviewNotice({
+              title: '该文件较大',
+              message: '文件已转服务端存储，内联预览不可用；请使用「下载」在本地查看。',
+              node, downloadOnly: true, code: 'preview_too_large',
+            })
             return
           }
+          let bytes: Uint8Array
           try {
-            const bs = atob(p.output)
-            setPreviewSize(bs.length)
-            let bin = 0
-            for (let i = 0; i < Math.min(bs.length, 2048); i++) {
-              const c = bs.charCodeAt(i)
-              if (c === 0 || (c < 9 && c !== 10 && c !== 13)) bin++
-            }
-            if (bin > Math.min(bs.length, 2048) * 0.1) {
-              setPreviewContent('[二进制文件，无法预览]')
-              return
-            }
-            const pl = Math.min(bs.length, 100 * 1024)
-            const bytes = new Uint8Array(pl)
-            for (let i = 0; i < pl; i++) bytes[i] = bs.charCodeAt(i)
-            setPreviewContent(new TextDecoder().decode(bytes))
-            setPreviewTruncated(bs.length > 100 * 1024)
-          } catch { setPreviewContent('[二进制]') }
+            bytes = base64ToBytes(p.output)
+          } catch {
+            setPreviewNotice({ title: '预览失败', message: '服务端返回的内容不是合法 base64。', node, downloadOnly: true, code: 'preview_failed' })
+            return
+          }
+          if (isMostlyBinary(bytes)) {
+            setPreviewNotice({
+              title: '该文件不支持内联预览',
+              message: '内容被判定为二进制（含 NUL/控制字符），已拒绝内联预览；请下载后在本地查看。',
+              node, downloadOnly: true, code: 'preview_binary',
+            })
+            return
+          }
+          const limit = policy.oversize_preview_bytes
+          const slice = bytes.subarray(0, Math.min(bytes.length, limit))
+          setPreviewContent(new TextDecoder().decode(slice))
+          setPreviewSize(bytes.length)
+          setPreviewTruncated(bytes.length > limit)
+          setPreviewLimit(limit)
+          setPreviewCategory('text')
+          setPreviewReadOnly(false)
         }
       }
-    } catch (e) { console.error(e) }
-    finally { setPreviewLoading(false) }
-  }, [session.id, pollTask])
+    } catch (e) {
+      console.error(e)
+      setPreviewNotice({ title: '预览失败', message: String((e as Error)?.message || e), node, downloadOnly: true, code: 'preview_failed' })
+    }
+  }, [session.id, pollTask, policy.oversize_preview_bytes])
+
+  // 真正请求预览：服务端二次校验；415/409/413 一律转成弹窗，不静默失败。
+  const requestPreview = useCallback(async (node: FileNode, force: boolean, dec: PreviewDecision) => {
+    setPreviewLoading(true)
+    setPreviewName(node.name)
+    setPreviewPath(node.path)
+    setEditing(false)
+    setPreviewContent(null)
+    setPreviewImage(null)
+    setPreviewSize(0)
+    setPreviewTruncated(!!dec.truncated)
+    setPreviewLimit(dec.previewBytes)
+    setPreviewCategory(dec.category)
+    setPreviewReadOnly(dec.category === 'unknown' || force)
+    try {
+      const r = await sessionApi.previewFile(session.id, node.path, node.size, force)
+      const d = r.data
+      const bytes = d.content_b64 ? base64ToBytes(d.content_b64) : new Uint8Array()
+      if (d.category === 'image') {
+        if (!d.mime || !d.content_b64) {
+          setPreviewNotice({ title: '该文件不支持内联预览', message: '图片内容签名校验未通过；请下载查看。', node, downloadOnly: true, code: 'preview_bad_image' })
+          return
+        }
+        setPreviewImage(`data:${d.mime};base64,${d.content_b64}`)
+      } else {
+        if (isMostlyBinary(bytes)) {
+          setPreviewNotice({ title: '该文件不支持内联预览', message: '内容被判定为二进制（含 NUL/控制字符），已拒绝内联预览；请下载后在本地查看。', node, downloadOnly: true, code: 'preview_binary' })
+          return
+        }
+        setPreviewContent(new TextDecoder().decode(bytes))
+      }
+      setPreviewSize(d.size || bytes.length)
+      setPreviewTruncated(!!d.truncated)
+      setPreviewLimit(d.preview_bytes || dec.previewBytes)
+      setPreviewCategory(d.category)
+    } catch (e: any) {
+      const status = e?.response?.status
+      const data = e?.response?.data as PreviewFileError | undefined
+      // 老服务端没有该接口（404/405）→ 回退到旧预览链路
+      if (!e?.response || status === 404 || status === 405) {
+        await legacyPreviewFile(node)
+        return
+      }
+      const code = data?.code
+      const message = data?.message || data?.error || `预览请求失败（HTTP ${status}）`
+      if (status === 409 || code === 'preview_unknown_ext') {
+        setPreviewNotice({
+          title: '该后缀不在预览白名单',
+          message,
+          node,
+          confirmForce: true,
+          limitBytes: data?.preview_bytes || dec.previewBytes,
+          code,
+        })
+      } else if (status === 415 || code === 'preview_blocked' || code === 'preview_binary' || code === 'preview_bad_image') {
+        setPreviewNotice({ title: '该文件不支持内联预览', message, node, downloadOnly: true, code })
+      } else if (status === 413 || code === 'preview_too_large') {
+        setPreviewNotice({ title: '文件过大，无法内联预览', message, node, downloadOnly: true, code })
+      } else {
+        setPreviewNotice({ title: '预览失败', message, node, downloadOnly: true, code })
+      }
+    } finally {
+      setPreviewLoading(false)
+    }
+  }, [session.id, legacyPreviewFile])
+
+  // 预览入口：先按服务端下发的清单做本地判定（命中黑名单/未识别直接弹窗），
+  // 允许的再交给服务端二次校验。
+  const previewFile = useCallback((node: FileNode) => {
+    if (node.isDir) return
+    const dec = decidePreview(node.name, node.size, false, policy)
+    if (!dec.allowed) {
+      if (dec.requiresConfirmation) {
+        setPreviewNotice({
+          title: '该后缀不在预览白名单',
+          message: dec.message,
+          node,
+          confirmForce: true,
+          limitBytes: dec.previewBytes,
+          code: dec.code,
+        })
+      } else {
+        setPreviewNotice({
+          title: dec.code === 'preview_too_large' ? '文件过大，无法内联预览' : '该文件不支持内联预览',
+          message: dec.message,
+          node,
+          downloadOnly: true,
+          code: dec.code,
+        })
+      }
+      return
+    }
+    void requestPreview(node, false, dec)
+  }, [policy, requestPreview])
+
+  // 操作员在弹窗里选择"仍要预览（前 N KB，只读）"
+  const forcePreview = useCallback((node: FileNode) => {
+    setPreviewNotice(null)
+    const dec = decidePreview(node.name, node.size, true, policy)
+    void requestPreview(node, true, dec)
+  }, [policy, requestPreview])
 
   const downloadFile = useCallback(async (node: FileNode) => {
     if (node.isDir) return
@@ -714,8 +895,13 @@ export function FileManager({ session }: { session: Session }) {
   }, [session.id, rootPath, isWindows, pollTask, loadRoot, itemsToNodes, loadPath])
 
   // 预览编辑保存：用新内容覆盖原文件（复用分片上传链路）
+  // 只读预览（未识别后缀强制预览）与截断预览禁止保存，避免把"前缀"写回原文件。
   const saveEditedFile = useCallback(async () => {
     if (!previewPath || draftContent === null) return
+    if (previewReadOnly || previewTruncated || previewCategory !== 'text') {
+      alert('当前预览为只读/已截断，不能直接保存；请下载后在本地修改。')
+      return
+    }
     setSaving(true)
     try {
       const blob = new Blob([draftContent], { type: 'text/plain;charset=utf-8' })
@@ -732,7 +918,7 @@ export function FileManager({ session }: { session: Session }) {
     } finally {
       setSaving(false)
     }
-  }, [previewPath, previewName, draftContent, handleUploadFile])
+  }, [previewPath, previewName, draftContent, handleUploadFile, previewReadOnly, previewTruncated, previewCategory])
 
   // ----- context menu -----
 
@@ -787,15 +973,22 @@ export function FileManager({ session }: { session: Session }) {
       </div>
 
       {/* preview modal */}
-      {(previewContent || previewLoading) && (
-        <div className="modal-overlay" onClick={() => { setPreviewContent(null); setPreviewName('') }}>
+      {(previewContent !== null || previewImage !== null || previewLoading) && !previewNotice && (
+        <div className="modal-overlay" onClick={closePreview}>
           <div className="modal-preview" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <h3>{editing ? '编辑' : '预览'}: {previewName}</h3>
               <div className="modal-header-actions">
-                {previewTruncated && <span className="truncated-badge">仅100KB</span>}
-                {previewSize > 0 && <span className="size-badge">{(previewSize / 1024).toFixed(1)} KB</span>}
-                {!editing && !previewLoading && previewContent && !previewContent.startsWith('[') && (
+                {previewCategory === 'image' && <span className="size-badge">图片</span>}
+                {previewReadOnly && <span className="size-badge">只读</span>}
+                {previewTruncated && (
+                  <span className="truncated-badge" title="只回传文件前缀，不是完整文件">
+                    已截断 · 仅前 {humanBytes(previewLimit || policy.oversize_preview_bytes)}
+                  </span>
+                )}
+                {previewSize > 0 && <span className="size-badge">{formatSize(previewSize)}</span>}
+                {!editing && !previewLoading && previewCategory === 'text' && previewContent !== null
+                  && !previewReadOnly && !previewTruncated && (
                   <button className="btn-small" onClick={() => { setDraftContent(previewContent); setEditing(true) }}>
                     <Edit3 size={14} /> 编辑
                   </button>
@@ -810,7 +1003,7 @@ export function FileManager({ session }: { session: Session }) {
                     </button>
                   </>
                 )}
-                <button className="btn-small" onClick={() => { setPreviewContent(null); setPreviewName(''); setEditing(false) }}>
+                <button className="btn-small" onClick={closePreview}>
                   <X size={16} />
                 </button>
               </div>
@@ -825,7 +1018,44 @@ export function FileManager({ session }: { session: Session }) {
                       onChange={e => setDraftContent(e.target.value)}
                       spellCheck={false}
                     />
-                  : <pre className="preview-content-scroll">{previewContent}</pre>}
+                  : previewImage
+                    ? <img className="preview-image" src={previewImage} alt={previewName} />
+                    : <pre className="preview-content-scroll">{previewContent}</pre>}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 预览限制弹窗：黑名单只给下载；未识别后缀给"仍要预览（前 N KB，只读）" */}
+      {previewNotice && (
+        <div className="modal-overlay" onClick={() => setPreviewNotice(null)}>
+          <div className="modal-notice" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3><AlertTriangle size={16} /> {previewNotice.title}</h3>
+              <button className="btn-small" onClick={() => setPreviewNotice(null)} title="关闭">
+                <X size={16} />
+              </button>
+            </div>
+            <div className="modal-body preview-notice-body">
+              <p className="preview-notice-file" title={previewNotice.node.path}>{previewNotice.node.name}</p>
+              <p className="preview-notice-message">{previewNotice.message}</p>
+              {previewNotice.code && (
+                <p className="preview-notice-code">code: {previewNotice.code}</p>
+              )}
+            </div>
+            <div className="modal-footer preview-notice-actions">
+              <button className="btn-small" onClick={() => setPreviewNotice(null)}>取消</button>
+              {previewNotice.confirmForce && (
+                <button className="btn-small" onClick={() => forcePreview(previewNotice.node)}>
+                  仍要预览（前 {humanBytes(previewNotice.limitBytes || policy.max_unknown_preview_bytes)}，只读）
+                </button>
+              )}
+              <button
+                className="btn-small primary"
+                onClick={() => { const node = previewNotice.node; setPreviewNotice(null); void downloadFile(node) }}
+              >
+                <Download size={14} /> 下载
+              </button>
             </div>
           </div>
         </div>

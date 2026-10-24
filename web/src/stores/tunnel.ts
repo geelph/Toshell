@@ -16,6 +16,8 @@ export interface SOCKS5Server {
   session_id: string
   local_port: number
   tunnels: Tunnel[]
+  /** 是否启用代理认证（列表接口回显；口令永不回传） */
+  auth_enabled?: boolean
 }
 
 interface TunnelState {
@@ -23,7 +25,12 @@ interface TunnelState {
   loading: boolean
   error: string | null
   fetchTunnels: () => Promise<void>
-  createTunnel: (sessionId: string, localPort: number) => Promise<{ success: boolean; error?: string; local_port?: number }>
+  createTunnel: (
+    sessionId: string,
+    localPort: number,
+    authUser?: string,
+    authPass?: string,
+  ) => Promise<{ success: boolean; error?: string; local_port?: number; auth_enabled?: boolean }>
   closeTunnel: (sessionId: string) => Promise<{ success: boolean; error?: string }>
   clearError: () => void
 }
@@ -47,20 +54,25 @@ export const useTunnelStore = create<TunnelState>()(
         }
       },
 
-      createTunnel: async (sessionId: string, localPort: number) => {
+      createTunnel: async (sessionId: string, localPort: number, authUser?: string, authPass?: string) => {
         try {
-          const response = await tunnelApi.create(sessionId, localPort)
+          const response = await tunnelApi.create(sessionId, localPort, authUser, authPass)
           if (response.data?.success) {
             const newServer: SOCKS5Server = {
               session_id: sessionId,
               local_port: response.data.local_port,
               tunnels: [],
+              auth_enabled: !!response.data.auth_enabled,
             }
             set(state => ({
               servers: [...state.servers, newServer],
               error: null
             }))
-            return { success: true, local_port: response.data.local_port }
+            return {
+              success: true,
+              local_port: response.data.local_port,
+              auth_enabled: !!response.data.auth_enabled,
+            }
           } else {
             const errorMsg = response.data?.error || '未知错误'
             set({ error: errorMsg })

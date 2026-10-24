@@ -83,8 +83,8 @@ type Tunnel struct {
 	// 与 done 分离：收到 close 帧不立即 CloseTunnel——close 帧与 data 帧同队列 FIFO，
 	// 到达时下行数据已全部入队，但 writeCh/overflow 可能尚未排空。
 	// relay 收到 closeReq 后走"排空再关"路径，避免最后一批下行帧被强砍。
-	closeReq    chan struct{}
-	ClientConn  net.Conn
+	closeReq   chan struct{}
+	ClientConn net.Conn
 
 	// 下行写入队列：单 goroutine 顺序写入 ClientConn，消除多 goroutine 并发 Write 的竞争与上下文切换开销。
 	// writeCh 为快速路径；当其被慢客户端填满时，新帧转入 overflow（保持同隧道严格有序），
@@ -530,12 +530,14 @@ var downlinkBufPool = sync.Pool{
 type sendFunc func(sessionID string, packet []byte) error
 
 type SOCKS5Server struct {
-	port           int
-	listener       net.Listener   // 主监听（兼容旧逻辑 / 对外 GetAddr）
-	listeners      []net.Listener // 双栈：127.0.0.1 + ::1，修复浏览器 localhost→::1 失败
-	tunnelMgr      *TunnelManager
-	sendToImplant  sendFunc
-	sessionID      string
+	port          int
+	listener      net.Listener   // 主监听（兼容旧逻辑 / 对外 GetAddr）
+	listeners     []net.Listener // 双栈：127.0.0.1 + ::1，修复浏览器 localhost→::1 失败
+	tunnelMgr     *TunnelManager
+	sendToImplant sendFunc
+	sessionID     string
+	// auth 可选 SOCKS5/HTTP 代理认证（nil = 不启用，保持历史无认证行为）。
+	auth           *AuthConfig
 	stopChan       chan struct{}
 	wg             sync.WaitGroup
 	connectTimeout time.Duration
@@ -812,27 +814,28 @@ func (s *SOCKS5Server) handleConnection(conn net.Conn) {
 	}
 
 	var (
-		targetHost string
-		targetPort uint16
-		err        error
-		reader     io.Reader
-		isHTTP     bool
-		initialData []byte   // HTTP 绝对 URI 模式下改写后的请求头，隧道建立后先发送
-		upStream   io.Reader // relay 上行数据源：CONNECT/SOCKS5 为 conn，绝对 URI 为 bufio
+		targetHost  string
+		targetPort  uint16
+		err         error
+		reader      io.Reader
+		isHTTP      bool
+		initialData []byte    // HTTP 绝对 URI 模式下改写后的请求头，隧道建立后先发送
+		upStream    io.Reader // relay 上行数据源：CONNECT/SOCKS5 为 conn，绝对 URI 为 bufio
 	)
 	upStream = conn
 
 	if peek[0] == 0x05 {
 		// SOCKS5：已读 1 字节，需连同首字节一起解析，用 io.MultiReader 回填
 		reader = io.MultiReader(bytes.NewReader(peek), conn)
-		targetHost, targetPort, err = socks5Handshake(reader, conn)
+		targetHost, targetPort, err = socks5Handshake(reader, conn, s.auth)
 	} else {
 		// HTTP 代理（Edge/Chrome 系统代理默认协议）：
 		//  - CONNECT host:port  → HTTPS 隧道（浏览器访问 https:// 站点）
 		//  - GET http://host/   → 绝对 URI 正向代理（浏览器访问 http:// 站点）
+		// 启用认证时同样校验 Proxy-Authorization（否则 HTTP 路径会绕过认证）。
 		isHTTP = true
 		reader = io.MultiReader(bytes.NewReader(peek), conn)
-		targetHost, targetPort, initialData, upStream, err = httpConnectHandshake(reader, conn)
+		targetHost, targetPort, initialData, upStream, err = httpConnectHandshake(reader, conn, s.auth)
 	}
 	if err != nil {
 		return
@@ -944,7 +947,10 @@ func (s *SOCKS5Server) handleConnection(conn net.Conn) {
 
 // socks5Handshake 执行 SOCKS5 握手，返回目标地址和端口。
 // reader 接收已含首字节的流（调用方通过 io.MultiReader 回填 pre-read 的 1 字节）。
-func socks5Handshake(reader io.Reader, conn net.Conn) (host string, port uint16, err error) {
+//
+// auth 非空且启用时走 RFC 1929：只接受 0x02（用户/口令）方法，并在子协商里
+// 用常量时间比较校验；未启用时保持历史行为（只接受 0x00 无认证）。
+func socks5Handshake(reader io.Reader, conn net.Conn, auth *AuthConfig) (host string, port uint16, err error) {
 	// 读取客户端方法列表: [VER, NMETHODS, METHODS...]
 	header := make([]byte, 2)
 	if _, err = io.ReadFull(reader, header); err != nil {
@@ -962,19 +968,28 @@ func socks5Handshake(reader io.Reader, conn net.Conn) (host string, port uint16,
 		}
 	}
 
-	// 仅支持无认证
-	hasNoAuth := false
-	for _, m := range methods {
-		if m == 0x00 {
-			hasNoAuth = true
-			break
+	if auth.Enabled() {
+		// 启用认证：必须支持 0x02，否则明确回 0xFF（no acceptable methods）
+		if !hasMethod(methods, 0x02) {
+			_, _ = conn.Write([]byte{0x05, 0xFF})
+			return "", 0, fmt.Errorf("no acceptable auth method: username/password required")
+		}
+		if _, err = conn.Write([]byte{0x05, 0x02}); err != nil {
+			return "", 0, fmt.Errorf("write auth method: %w", err)
+		}
+		if err = socks5Subnegotiate(reader, conn, auth); err != nil {
+			return "", 0, err
+		}
+	} else {
+		// 仅支持无认证（历史行为）
+		if !hasMethod(methods, 0x00) {
+			_, _ = conn.Write([]byte{0x05, 0xFF})
+			return "", 0, fmt.Errorf("no acceptable auth method")
+		}
+		if _, err = conn.Write([]byte{0x05, 0x00}); err != nil {
+			return "", 0, fmt.Errorf("write no-auth method: %w", err)
 		}
 	}
-	if !hasNoAuth {
-		conn.Write([]byte{0x05, 0xFF})
-		return "", 0, fmt.Errorf("no acceptable auth method")
-	}
-	conn.Write([]byte{0x05, 0x00})
 
 	// 读取请求: [VER, CMD, RSV, ATYP, DST...]
 	reqHeader := make([]byte, 4)
@@ -987,7 +1002,7 @@ func socks5Handshake(reader io.Reader, conn net.Conn) (host string, port uint16,
 
 	cmd := reqHeader[1]
 	if cmd != 0x01 { // 仅支持 CONNECT
-		conn.Write([]byte{0x05, 0x07, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
+		_, _ = conn.Write([]byte{0x05, 0x07, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
 		return "", 0, fmt.Errorf("unsupported cmd: %d", cmd)
 	}
 
@@ -1019,7 +1034,7 @@ func socks5Handshake(reader io.Reader, conn net.Conn) (host string, port uint16,
 		host = net.IP(ip).String()
 
 	default:
-		conn.Write([]byte{0x05, 0x08, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
+		_, _ = conn.Write([]byte{0x05, 0x08, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
 		return "", 0, fmt.Errorf("unsupported addr type: %d", addrType)
 	}
 
@@ -1040,9 +1055,13 @@ func socks5Handshake(reader io.Reader, conn net.Conn) (host string, port uint16,
 //   - "GET http://host:port/path HTTP/1.1"：绝对 URI 正向代理（浏览器访问
 //     http:// 站点）。不改写无法直连目标（请求行含绝对 URI 会导致服务器 400），
 //     因此把请求行改写为 "GET /path HTTP/1.1" 作为 initialData 交给隧道首发。
+//
 // 返回目标地址、端口、改写后的请求头（仅绝对 URI 模式非空）以及上行数据源
 // （bufio 流，保证握手阶段已预读的请求体不丢失）。
-func httpConnectHandshake(reader io.Reader, conn net.Conn) (host string, port uint16, initialData []byte, upStream io.Reader, err error) {
+//
+// auth 启用时会校验 Proxy-Authorization: Basic（否则 HTTP 路径可绕过认证），
+// 缺失/错误回 407 Proxy Authentication Required。
+func httpConnectHandshake(reader io.Reader, conn net.Conn, auth *AuthConfig) (host string, port uint16, initialData []byte, upStream io.Reader, err error) {
 	br := bufio.NewReader(reader)
 
 	// 读取请求行
@@ -1058,6 +1077,9 @@ func httpConnectHandshake(reader io.Reader, conn net.Conn) (host string, port ui
 	}
 	method := parts[0]
 	target := parts[1]
+
+	// 请求头逐行读入：既用于 HTTP 认证校验，也用于 CONNECT 后丢弃。
+	var headerLines []string
 
 	if strings.EqualFold(method, "CONNECT") {
 		// ── HTTPS 隧道：CONNECT host:port HTTP/1.1 ──
@@ -1080,6 +1102,12 @@ func httpConnectHandshake(reader io.Reader, conn net.Conn) (host string, port ui
 			if line == "\r\n" || line == "\n" {
 				break
 			}
+			headerLines = append(headerLines, line)
+		}
+
+		if !httpProxyAuthOK(headerLines, auth) {
+			writeHTTPProxyAuthRequired(conn)
+			return "", 0, nil, nil, fmt.Errorf("proxy authentication required")
 		}
 
 		// 回复 200 Connection Established
@@ -1128,6 +1156,12 @@ func httpConnectHandshake(reader io.Reader, conn net.Conn) (host string, port ui
 		if line == "\r\n" || line == "\n" {
 			break
 		}
+		headerLines = append(headerLines, line)
+	}
+
+	if !httpProxyAuthOK(headerLines, auth) {
+		writeHTTPProxyAuthRequired(conn)
+		return "", 0, nil, nil, fmt.Errorf("proxy authentication required")
 	}
 
 	// 绝对 URI 模式不回复任何代理应答：浏览器直接等待目标服务器的响应。
@@ -1180,9 +1214,11 @@ func optimizeTCPConn(conn net.Conn) {
 // ─── relay: 双向中继 ──────────────────────────────────────────────────────
 
 // relay 双向中继（对标 nps SOCKS5 的 io.Copy 语义）：
-//  上行（浏览器→目标）：读到 EOF/错误即停止上行，不做任何关闭动作；
-//  下行（目标→浏览器）：由独立 writer 持续转发，直到植入端 close 帧（目标 EOF）
-//    排空下行队列后才整体关闭隧道与浏览器连接。
+//
+//	上行（浏览器→目标）：读到 EOF/错误即停止上行，不做任何关闭动作；
+//	下行（目标→浏览器）：由独立 writer 持续转发，直到植入端 close 帧（目标 EOF）
+//	  排空下行队列后才整体关闭隧道与浏览器连接。
+//
 // 关键：浏览器方向 EOF 后绝不能 CloseWrite/FIN —— 本端是 SOCKS5 连接，
 // 本地代理收到 FIN 即视为隧道结束并立即关闭浏览器连接，导致 TLS 握手中途
 // ERR_SSL_PROTOCOL_ERROR（HTTPS 全挂、HTTP 因响应已完整而正常）。

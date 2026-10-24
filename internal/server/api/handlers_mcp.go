@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"toshell/internal/common/tunnel"
 	"toshell/internal/common/types"
 	"toshell/internal/server/config"
 	"toshell/internal/server/intel"
@@ -141,7 +142,7 @@ func (s *Server) invokeTool(name string, params map[string]string) (interface{},
 			}
 			recent = append(recent, map[string]interface{}{
 				"task_type": t.TaskType, "command": t.Command,
-				"status": t.Status, "output": truncateStr(t.Output, 200),
+				"status": t.Status, "output": summarizeOutput(t.Output, 200),
 			})
 		}
 		return map[string]interface{}{
@@ -338,19 +339,27 @@ func (s *Server) invokeTool(name string, params map[string]string) (interface{},
 			return nil, fmt.Errorf("session_id required")
 		}
 		port, _ := strconv.Atoi(params["local_port"])
-		p, err := s.startSOCKS5(sid, port)
+		// 代理认证可选：auth_user/auth_pass 留空 = 无认证（兼容旧调用）。
+		auth := &tunnel.AuthConfig{Username: params["auth_user"], Password: params["auth_pass"]}
+		if err := auth.Validate(); err != nil {
+			return nil, err
+		}
+		p, err := s.startSOCKS5(sid, port, auth)
 		if err != nil {
 			return nil, err
 		}
-		return map[string]interface{}{"session_id": sid, "local_port": p, "status": "running"}, nil
+		return map[string]interface{}{
+			"session_id": sid, "local_port": p, "status": "running", "auth_enabled": auth.Enabled(),
+		}, nil
 	case "tunnel_list":
 		s.socks5Mu.RLock()
 		slist := []map[string]interface{}{}
 		for sid, socks5 := range s.socks5Servers {
 			slist = append(slist, map[string]interface{}{
-				"session_id": sid,
-				"local_port": socks5.GetPort(),
-				"tunnels":    len(socks5.GetTunnelManager().ListTunnels()),
+				"session_id":   sid,
+				"local_port":   socks5.GetPort(),
+				"tunnels":      len(socks5.GetTunnelManager().ListTunnels()),
+				"auth_enabled": socks5.AuthEnabled(),
 			})
 		}
 		s.socks5Mu.RUnlock()
@@ -881,7 +890,9 @@ func (s *Server) pushAndAwait(sid string, taskInfo *types.TaskInfo, timeoutSec i
 	}
 }
 
-// taskOutput 返回任务输出原文。
+// taskOutput 返回任务输出的**展示文本**（唯一转换点，见 output_display.go）：
+// 原始 Output 若是 GBK 控制台字节，这里按 CP936 解码成 UTF-8；合法 UTF-8 原样返回。
+// 转换只作用于返回值，task.Output 与数据库里的原始字节不变（raw=1 可无损回读）。
 //
 // ⚠️ 这里**故意不再做字符串截断**（历史实现是 truncateStr(t.Output, 8000/4000)）。
 // 工具层一旦把 JSON 正文切成两半，下游再也无法恢复：
@@ -897,7 +908,7 @@ func taskOutput(t *types.TaskInfo) string {
 	if t == nil {
 		return ""
 	}
-	return t.Output
+	return displayOutput(t.Output)
 }
 
 // execAndAwait TaskOrchestrator 核心：在指定会话下发一次性命令并原子等待结果。

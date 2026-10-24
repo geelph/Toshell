@@ -14,6 +14,9 @@ export function Tunnels() {
   const [formData, setFormData] = useState({
     session_id: '',
     local_port: 1080,
+    // 认证可选：留空 = 不启用认证（保持历史行为）。口令只用于创建请求，不回显。
+    auth_user: '',
+    auth_pass: '',
   })
   const [creating, setCreating] = useState(false)
   const [closingId, setClosingId] = useState<string | null>(null)
@@ -124,15 +127,34 @@ export function Tunnels() {
       toast.warning('请选择一个会话')
       return
     }
+    // 认证字段要么都填、要么都不填；只填一半时明确提示，不把半截配置发给服务端。
+    const user = formData.auth_user.trim()
+    const pass = formData.auth_pass
+    if ((user && !pass) || (!user && pass)) {
+      toast.warning('启用认证时用户名与口令都必须填写；留空则不加认证')
+      return
+    }
 
     setCreating(true)
-    const result = await createTunnel(formData.session_id, formData.local_port)
+    const result = await createTunnel(formData.session_id, formData.local_port, user, pass)
     setCreating(false)
 
     if (result.success) {
+      // 兼容性 fail-closed：请求了认证但服务端回执没有 auth_enabled=true
+      // （老服务端会静默忽略 auth_user/auth_pass）→ 立即停掉这个"裸奔"代理，
+      // 明确告知而不是留下一个以为有认证、实际无认证的入口。
+      if (user && !result.auth_enabled) {
+        await closeTunnel(formData.session_id)
+        toast.error('服务端未启用代理认证（服务端版本可能不支持）：已自动停止该代理，避免无认证暴露。请升级服务端后重试。')
+        return
+      }
       setShowCreate(false)
-      toast.success(`SOCKS5代理已启动，端口: ${result.local_port}`)
-      setFormData({ session_id: '', local_port: 1080 })
+      toast.success(
+        result.auth_enabled
+          ? `SOCKS5代理已启动，端口: ${result.local_port}（已启用用户名/口令认证）`
+          : `SOCKS5代理已启动，端口: ${result.local_port}（未启用认证）`,
+      )
+      setFormData({ session_id: '', local_port: 1080, auth_user: '', auth_pass: '' })
     } else {
       toast.error(`创建失败: ${result.error}`)
     }
@@ -248,10 +270,35 @@ export function Tunnels() {
                 placeholder="1080"
               />
             </div>
+            <div className="form-group">
+              <label>认证用户名（可选）</label>
+              <input
+                type="text"
+                autoComplete="off"
+                value={formData.auth_user}
+                onChange={(e) => setFormData({ ...formData, auth_user: e.target.value })}
+                placeholder="留空 = 不启用认证"
+                maxLength={255}
+              />
+            </div>
+            <div className="form-group">
+              <label>认证口令（可选）</label>
+              <input
+                type="password"
+                autoComplete="new-password"
+                value={formData.auth_pass}
+                onChange={(e) => setFormData({ ...formData, auth_pass: e.target.value })}
+                placeholder="与用户名成对填写"
+                maxLength={255}
+              />
+            </div>
           </div>
           <p className="form-hint">
             创建SOCKS5代理后，可通过该代理访问植入端的内网资源。<br/>
             使用方法: 配置代理为 socks5://127.0.0.1:{formData.local_port}
+            {formData.auth_user ? `（认证用户 ${formData.auth_user}，口令需在客户端填写）` : ''}<br/>
+            认证为可选：<b>仅 SOCKS5 客户端需要填</b>，留空即无认证（老客户端照旧可用）。
+            口令只用于配置代理监听器，保存后不会回显；日志里只记录"是否启用认证"。
           </p>
           <div className="form-actions">
             <button className="btn-secondary" onClick={() => setShowCreate(false)}>取消</button>
@@ -289,6 +336,9 @@ export function Tunnels() {
                   <Network size={20} />
                   <span>SOCKS5代理</span>
                   <span className="socks5-port">端口: {server.local_port}</span>
+                  <span className={`socks5-auth ${server.auth_enabled ? 'on' : 'off'}`}>
+                    {server.auth_enabled ? '认证: 已启用' : '无认证'}
+                  </span>
                 </div>
                 <div className="socks5-actions">
                   <span className="socks5-status active">
@@ -351,6 +401,21 @@ export function Tunnels() {
                   <span className="info-label">活动连接数:</span>
                   <span className="info-value">{selectedServer.tunnels.length}</span>
                 </div>
+                <div className="info-item">
+                  <span className="info-label">客户端认证:</span>
+                  <span className="info-value">
+                    {selectedServer.auth_enabled ? '已启用（SOCKS5 用户名/口令）' : '未启用'}
+                  </span>
+                </div>
+                {selectedServer.auth_enabled && (
+                  <div className="info-item">
+                    <span className="info-label">客户端填法:</span>
+                    <span className="info-value">
+                      socks5://用户名:口令@127.0.0.1:{selectedServer.local_port}
+                      （口令不会回显，请使用创建时设置的凭据）
+                    </span>
+                  </div>
+                )}
               </div>
               
               <div className="tunnel-details-list">

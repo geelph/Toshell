@@ -1,6 +1,6 @@
 # ToShell Team Server 使用说明
 
-> **当前版本: v1.4.0(2026-09-28 已发布)** · 更新日志见 [CHANGELOG.md](CHANGELOG.md) 与文末「附」章节。
+> **当前版本: v1.4.1(补丁版;基线 v1.4.0 于 2026-09-28 发布)** · 更新日志见 [CHANGELOG.md](CHANGELOG.md) 与文末「附」章节。
 
 > ToShell 是一个自托管的 C2(命令与控制)框架,用于授权红队演练、渗透测试与安全研究。请仅在获得授权的前提下使用。
 
@@ -545,6 +545,14 @@ python scripts/reset_release_db.py --db release/data/toshell.db
 
 ## 附、更新日志与新增功能
 
+### v1.4.1(补丁版)
+
+- **显示修复**:Linux 会话用户名不再一律 `unknown`(环境变量 → `/etc/passwd` → `uid:<n>`);杀软击杀、启动项回显的乱码修掉——根因是**整串** GBK 转换,而回执是"UTF-8 中文 + GBK 工具输出"的混合串,现改为**逐行**判定(合法 UTF-8 原样保留)。展示层转换**不改原始结果字节**,另增 `GET /api/v1/tasks/{id}?raw=1` 无损回读。
+- **代理认证**:创建 SOCKS5 代理时可选填用户名/口令(RFC 1929),HTTP CONNECT 路径同样校验;留空 = 原行为,回执/日志不回显口令。
+- **文件预览限制**:按后缀白名单预览,未识别/禁用后缀弹窗提示(可前缀预览或下载);服务端二次校验(二进制嗅探 + 图片魔数),超大只给前缀并标注。
+- **Linux/amd64 载荷**:修掉 light 档在非 Windows 上编译不过、以及混淆器改写 const 导致全平台构建失败;新增构建期"协议与监听器通道一致性"拦截(这类载荷必然连上即断)。
+- **Rust 植入端可行性**:结论为可行,本机实测 light 等价物 350,720 B(Go 同形态 2,946,805 B),详见 `docs/RUST-IMPLANT.md`;v1.6 立项,本版无产品代码。
+- **如实边界**:Linux 运行时未验证(本机无 WSL/Docker);历史乱码不可回溯(旧载荷产物是"合法但错误的 UTF-8");代理认证只在 C2 侧监听器(植入端不解析 SOCKS5);预览 >64 MB 直接拒、超大文本只回前 64 KB。
 ### v1.4.0(2026-09-28)
 
 - **开放 MCP 接口 + 公共执行基础设施(S1)**:工具元数据单源化——38 个工具(37 + 回读元工具 `result_read`)按 read 13 / confirm 14 / danger 11 分档,`GET /api/v1/mcp/tools`、内置 AI function schema 与 MCP `tools/list` 三处同源;所有工具统一结果信封 `{status,data,error,meta}`,超限结果落盘 `data/mcp-results/` 并用 `result_read` 分页回读(不再静默截断);审批从"允许列表 + fail-open"改为**默认危险、只读白名单免审批**,并修掉 `plugin_upload`/`fileless_exec` 的路径穿越;对外 MCP 服务端 `mcp.*` 默认关闭、只绑回环、必须有 token。

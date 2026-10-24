@@ -379,11 +379,9 @@ func (s *Server) startListenerByID(id string) error {
 
 	// 装配与 main.go 一致的组件回调
 	taskResultCB := func(eventType string, taskID uint64, sessionID string, taskType string, exitCode int32, output string, errorMsg string) {
-		outputSummary := output
-		if len(outputSummary) > 200 {
-			outputSummary = outputSummary[:200] + "..."
-		}
-		s.BroadcastTaskEvent(eventType, taskID, sessionID, taskType, exitCode, outputSummary, errorMsg)
+		// 摘要按 rune 边界截断 + 展示层编码归一：旧的 output[:200] 会把 UTF-8/GBK 中文
+		// 切在半路，JSON 序列化后末尾变成一个 "�"。
+		s.BroadcastTaskEvent(eventType, taskID, sessionID, taskType, exitCode, summarizeOutput(output, 200), errorMsg)
 	}
 	webhookNotifier := webhook.New(&s.cfg.Webhook)
 	sessionDeadCB := func(sessionID string) {

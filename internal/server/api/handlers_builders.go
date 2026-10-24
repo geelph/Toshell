@@ -62,7 +62,7 @@ func (s *Server) listBuildersHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	formats := []string{"exe", "dll", "shellcode", "shellcode_bin", "raw"}
-	protocols := []string{"http", "https", "websocket", "mqtt"}
+	protocols := []string{"tcp", "http", "https", "websocket", "mqtt"}
 	osList := []string{"windows", "linux", "darwin"}
 	archList := []string{"amd64", "386", "arm64"}
 
@@ -218,6 +218,15 @@ func (s *Server) createBuilderHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.applyListenerDefaults(&req)
+
+	// 通道一致性防呆：所选监听器的协议与本次构建的协议必须属于同一条通道。
+	// 不一致时植入端会"连上就被监听器断开"（HTTP 请求打到裸 TCP 监听器，监听器把
+	// 首 4 字节当长度字段、超限即关连接），表现成连上即断/反复重连，且服务端日志
+	// 只有 New TCP connection / Connection closed，极难定位。宁可构建时直接拒绝。
+	if msg := s.listenerChannelMismatch(&req); msg != "" {
+		writeJSONError(w, http.StatusBadRequest, msg)
+		return
+	}
 
 	if req.ServerURL == "" {
 		req.ServerURL = fmt.Sprintf("http://localhost:%d", s.cfg.Server.Port)
@@ -525,6 +534,50 @@ func encodeUTF16LE(s string) string {
 		b[i*2+1] = byte(v >> 8)
 	}
 	return base64.StdEncoding.EncodeToString(b)
+}
+
+// listenerChannelMismatch 判断"本次构建的协议"与"所选监听器的协议"是否属于同一条
+// 通道族（tcp / http / websocket / mqtt）。返回空串表示一致、或无法判断
+// （没有选监听器、监听器已被删、数据库不可用）—— 这些情况仍走原来的逻辑。
+//
+// 为什么必须拦：通道不一致的载荷会"永远连不上但一直在连"。最典型的是按 http 构建、
+// 却指向 TCP 监听器：植入端会往裸 TCP 端口发 `POST ...`，监听器把首 4 字节
+// 0x504F5354 当长度字段（远超上限）立刻关闭连接，于是服务端每秒看到一次
+// New TCP connection + Connection closed，客户端表现为"秒断/反复重连"。
+// 这类问题在客户端一侧几乎无法自证，构建时就拒绝并说明原因，比事后抓包定位划算得多。
+func (s *Server) listenerChannelMismatch(req *BuildRequest) string {
+	if req == nil || req.ListenerID == "" {
+		return ""
+	}
+	db := database.Get()
+	if db == nil {
+		return ""
+	}
+	all, err := db.ListListeners()
+	if err != nil {
+		return ""
+	}
+	for _, l := range all {
+		if l.ID != req.ListenerID {
+			continue
+		}
+		want := builder.TransportForProtocol(l.Protocol)
+		got := builder.TransportForProtocol(req.Protocol)
+		if want == got {
+			return ""
+		}
+		name := l.Name
+		if name == "" {
+			name = l.ID
+		}
+		return fmt.Sprintf(
+			"通道不一致：监听器「%s」的协议是 %s（%s 通道），本次构建请求的是 %s（%s 通道）。"+
+				"这样生成的载荷会连上就被监听器断开、表现为反复重连。"+
+				"请把构建协议改成 %s，或换一个 %s 协议的监听器。",
+			name, l.Protocol, want, req.Protocol, got, l.Protocol, want,
+		)
+	}
+	return ""
 }
 
 // applyListenerDefaults fills in ServerURL and Protocol from the selected
