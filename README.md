@@ -404,11 +404,16 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/e2e_smoke.ps1
 | 渠道 / Channel | 地址 / Link |
 | :--- | :--- |
 | 作者 / Author | 青山（iQingshan） |
+| 交流群 / Group | **ToShell 测试群**（QQ 群，扫码加入，见下图） |
 | GitHub | [@iQingshan](https://github.com/iQingshan) |
 | 邮箱 / Email | [qingshan@88.com](mailto:qingshan@88.com) |
 | Issue / 功能建议 | [提交 Issue](https://github.com/iQingshan/Toshell/issues) |
 | 安全 / 滥用报告 | [SECURITY.md](SECURITY.md)（**不要**在公开 Issue 里贴可利用细节，可走邮件） |
 | 个人主页 / Profile | [github.com/iQingshan](https://github.com/iQingshan) |
+
+**交流群（ToShell 测试群）** —— 装不上、跑不通、想聊思路都可以进群；**能复现的 Bug 仍建议提 Issue**，这样别人也能搜到答案。
+
+<img src="docs/contact/toshell-group.png" width="300" alt="ToShell 测试群 二维码">
 
 > 使用问题、配置排查、功能建议：优先提 Issue（附版本、系统环境、复现步骤与相关日志），这样别人也能搜到答案。
 > 商务合作 / 授权咨询 / 漏洞披露：邮件联系。
