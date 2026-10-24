@@ -1,5 +1,5 @@
 import axios from 'axios'
-import type { Session, Task, TaskStats, LogEntry, TaskRequest, ListenerInfo, PeResourceRequest } from '../types'
+import type { Session, Task, TaskStats, LogEntry, TaskRequest, ListenerInfo, PeResourceRequest, BulkTaskRequest, BulkTaskResponse } from '../types'
 import type { PreviewPolicy } from '../utils/previewPolicy'
 
 export interface Tunnel {
@@ -165,12 +165,13 @@ export const sessionApi = {
 export const tunnelApi = {
   list: () => api.get<{ servers: SOCKS5ServerInfo[]; count: number }>('/tunnels'),
   /** auth_user/auth_pass 可选：留空 = 无认证（历史行为）。口令不会回显。 */
-  create: (session_id: string, local_port: number, auth_user?: string, auth_pass?: string) =>
+  create: (session_id: string, local_port: number, auth_user?: string, auth_pass?: string, remark?: string) =>
     api.post('/tunnels', {
       session_id,
       local_port,
       ...(auth_user ? { auth_user } : {}),
       ...(auth_pass ? { auth_pass } : {}),
+      ...(remark ? { remark } : {}),
     }),
   delete: (sessionId: string) => api.delete(`/tunnels/${sessionId}`),
 }
@@ -523,6 +524,23 @@ export interface SOCKS5ServerInfo {
   tunnels: Tunnel[]
   /** 是否启用了代理认证（口令绝不下发；老服务端可能没有该字段） */
   auth_enabled?: boolean
+  // ── v1.4.1 追加（老服务端不会返回，全部可选）：代理已落库，重启后自动恢复 ──
+  id?: string
+  /** 有效状态：running / error / stopped（运行态优先，其次库状态） */
+  status?: string
+  /** 当前是否真的有监听（与库对账后的运行态真值） */
+  listening?: boolean
+  /** 本次启动是否由「重启恢复」重建 */
+  restored?: boolean
+  /** 是否已落库（false = 无库降级，重启会丢） */
+  persisted?: boolean
+  /** 上次恢复/创建失败原因（端口占用等；不含任何凭据） */
+  last_error?: string
+  remark?: string
+  created_at?: string
+  updated_at?: string
+  protocol?: string
+  mode?: string
 }
 
 export interface Plugin {
@@ -567,6 +585,9 @@ export const taskApi = {
   delete: (id: number) => api.delete(`/tasks/${id}`),
   cancel: (id: number) => api.post(`/tasks/${id}/cancel`),
   stats: () => api.get<{ stats: TaskStats }>('/tasks/stats'),
+  /** 批量下发：一次请求把同一条任务下发给多个会话（v1.4.1，POST /tasks/bulk）。
+   * 逐项返回结果：ok=false 的项带服务端 error 原文，不影响其它项。 */
+  bulk: (data: BulkTaskRequest) => api.post<BulkTaskResponse>('/tasks/bulk', data),
 }
 
 export const logApi = {

@@ -31,6 +31,11 @@ type WSHub struct {
 	register   chan *WSClient
 	unregister chan *WSClient
 	mu         sync.RWMutex
+
+	// fanoutObserver 可选的广播扇出观测回调（v1.4.1 屏幕帧投递计数，见
+	// screen_stats.go）。nil = 完全走原路径：不额外分配、不打日志、行为不变。
+	// 回调在 Hub 事件循环中、**释放 clients 锁之后**同步调用，必须快速且非阻塞。
+	fanoutObserver func(message []byte, delivered, dropped int)
 }
 
 var wsUpgrader = websocket.Upgrader{
@@ -70,16 +75,24 @@ func (h *WSHub) Run() {
 
 		case message := <-h.broadcast:
 			h.mu.Lock()
+			delivered, dropped := 0, 0
 			for client := range h.clients {
 				select {
 				case client.send <- message:
+					delivered++
 				default:
 					// Client buffer full, drop and disconnect
 					close(client.send)
 					delete(h.clients, client)
+					dropped++
 				}
 			}
+			observer := h.fanoutObserver
 			h.mu.Unlock()
+			// 锁外调用：观测回调不能反过来拿 h.mu（也不能拖慢扇出）。
+			if observer != nil {
+				observer(message, delivered, dropped)
+			}
 		}
 	}
 }
@@ -166,4 +179,15 @@ func (h *WSHub) ClientCount() int {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return len(h.clients)
+}
+
+// SetFanoutObserver 注册广播扇出观测回调（屏幕帧投递计数用；nil = 关闭观测）。
+//
+// 回调参数：原始广播 JSON、本次成功写入订阅者发送缓冲的次数、因缓冲满被丢弃
+// （客户端同时被断开）的次数。回调在 Hub 事件循环里、锁外同步调用，必须非阻塞
+// 且不得反向调用 Hub 的写方法（否则会与事件循环互等）。
+func (h *WSHub) SetFanoutObserver(fn func(message []byte, delivered, dropped int)) {
+	h.mu.Lock()
+	h.fanoutObserver = fn
+	h.mu.Unlock()
 }

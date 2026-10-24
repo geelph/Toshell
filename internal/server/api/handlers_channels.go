@@ -69,5 +69,7 @@ func (s *Server) channelsHealthHandler(w http.ResponseWriter, r *http.Request) {
 		"total_online":  totalOnline,
 		"total_session": totalSession,
 		"timestamp":     time.Now().Unix(),
+		// v1.4.1：屏幕帧广播投递计数（只追加字段，四通道字段与语义不变）
+		"screen_stream": s.screenStreamStatsSnapshot(),
 	})
 }

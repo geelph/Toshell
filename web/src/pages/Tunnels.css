@@ -776,3 +776,38 @@
   font-size: 12px;
   padding: 6px 12px;
 }
+
+/* ── v1.4.1：隧道持久化后的状态展示（已恢复 / 恢复失败 / 未监听 / 未持久化）── */
+.socks5-status.error {
+  color: var(--color-danger);
+}
+
+.socks5-status.error .status-dot {
+  background: var(--color-danger);
+  animation: none;
+}
+
+.socks5-status.inactive {
+  color: var(--color-text-secondary);
+}
+
+.socks5-status.inactive .status-dot {
+  background: var(--color-text-secondary);
+  animation: none;
+}
+
+.socks5-remark {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  margin-bottom: 8px;
+}
+
+.socks5-error {
+  font-size: 12px;
+  color: var(--color-danger);
+  background: rgba(239, 68, 68, 0.08);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  word-break: break-all;
+}

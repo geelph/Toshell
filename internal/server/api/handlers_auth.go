@@ -69,6 +69,8 @@ func (s *Server) systemStatsHandler(w http.ResponseWriter, r *http.Request) {
 		},
 		"uptime":    time.Since(s.startTime).String(),
 		"timestamp": time.Now().Format(time.RFC3339),
+		// v1.4.1：屏幕帧广播投递计数（只追加字段，已有字段语义不变）
+		"screen_stream": s.screenStreamStatsSnapshot(),
 	}
 
 	json.NewEncoder(w).Encode(stats)

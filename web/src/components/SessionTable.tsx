@@ -19,6 +19,21 @@ interface SessionTableProps {
   statusFilter?: string
   /** 清除搜索/筛选（空态里的「清除筛选」按钮用） */
   onClearFilters?: () => void
+  /**
+   * 多选模式（v1.4.1 批量下发）：首列的序号换成 checkbox，表头给「全选/反选」。
+   * 不传 = 保持原来的序号列（组件对外仍向后兼容）。
+   *
+   * 为什么复用首列而不是新增一列：表格的 10 列宽度/对齐写在 Sessions.css 的
+   * `nth-child` 规则里，插入新列会让后面所有列的样式整体错位；而序号对批量操作
+   * 没有信息量，用它承载勾选可以不破坏既有布局。
+   */
+  selectable?: boolean
+  /** 已选会话 id（受控）。 */
+  selectedIds?: string[]
+  /** 勾选/取消单个会话。 */
+  onToggleSelect?: (id: string) => void
+  /** 全选/反选当前可见（搜索 + 状态过滤后）的会话。 */
+  onToggleSelectAll?: (ids: string[], select: boolean) => void
 }
 
 /** 会话状态 → 统一徽标（会话页表格与会话详情共用同一套文案/配色） */
@@ -59,6 +74,10 @@ export function SessionTable({
   searchFilter = '',
   statusFilter = 'all',
   onClearFilters,
+  selectable = false,
+  selectedIds,
+  onToggleSelect,
+  onToggleSelectAll,
 }: SessionTableProps) {
   const navigate = useNavigate()
 
@@ -79,6 +98,15 @@ export function SessionTable({
 
   const [confirmDelete, setConfirmDelete] = useState<Session | null>(null)
   const [deleting, setDeleting] = useState(false)
+
+  // 多选状态（受控于父组件）：可见集合 = 当前搜索 + 状态过滤后的列表。
+  const selectedSet = new Set(selectedIds || [])
+  const visibleIds = filteredSessions.map((s) => s.id)
+  const selectedVisible = visibleIds.filter((id) => selectedSet.has(id)).length
+  const allVisibleSelected = visibleIds.length > 0 && selectedVisible === visibleIds.length
+  const someVisibleSelected = selectedVisible > 0 && !allVisibleSelected
+
+  const toggleVisible = (select: boolean) => onToggleSelectAll?.(visibleIds, select)
 
   // 删除主机：后端会先向植入端推送"exit"任务令其停止运行，再移除会话记录
   const doDelete = async (session: Session) => {
@@ -126,7 +154,26 @@ export function SessionTable({
     <div className="sessions-list-panel">
       <table className="sessions-table">
         <thead>
-          <tr><th>#</th><th>备注</th><th>状态</th><th>主机名</th><th>用户</th><th>进程ID</th><th>内网IP</th><th>操作系统</th><th>心跳</th><th>操作</th></tr>
+          <tr>
+            <th className="session-select-col">
+              {selectable ? (
+                <input
+                  type="checkbox"
+                  aria-label="全选当前列表"
+                  title={allVisibleSelected ? '取消全选' : '全选当前列表'}
+                  checked={allVisibleSelected}
+                  ref={(el) => {
+                    if (el) el.indeterminate = someVisibleSelected
+                  }}
+                  onChange={(e) => toggleVisible(e.target.checked)}
+                  disabled={visibleIds.length === 0}
+                />
+              ) : (
+                '#'
+              )}
+            </th>
+            <th>备注</th><th>状态</th><th>主机名</th><th>用户</th><th>进程ID</th><th>内网IP</th><th>操作系统</th><th>心跳</th><th>操作</th>
+          </tr>
         </thead>
         <tbody>
           {filteredSessions.map((session, index) => {
@@ -139,7 +186,19 @@ export function SessionTable({
                 className={selectedSession?.id === session.id ? 'selected' : ''}
                 onClick={() => onSelectSession(session)}
               >
-                <td><span className="session-index">{index + 1}</span></td>
+                <td className="session-select-col">
+                  {selectable ? (
+                    <input
+                      type="checkbox"
+                      aria-label={`选择会话 ${session.hostname || session.id}`}
+                      checked={selectedSet.has(session.id)}
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={() => onToggleSelect?.(session.id)}
+                    />
+                  ) : (
+                    <span className="session-index">{index + 1}</span>
+                  )}
+                </td>
                 <td>
                   <div className="comment-cell" onClick={(e) => e.stopPropagation()}>
                     {editingId === session.id ? (

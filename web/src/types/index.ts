@@ -110,3 +110,36 @@ export interface ListenerInfo {
   created_at: number
   options?: string
 }
+
+/**
+ * 批量任务下发（POST /api/v1/tasks/bulk，v1.4.1）。
+ *
+ * 字段与单会话下发（TaskRequest / sessionApi.interact）同一套命名与语义：
+ * task_type / command / args / execute_type / timeout —— 只是把单个 session_id
+ * 换成 session_ids。服务端逐项返回结果（不是事务）：一个会话失败不影响其它会话。
+ */
+export interface BulkTaskRequest {
+  session_ids: string[]
+  /** 任务类型；留空 = command。仅允许侦察类（command/shell/sysinfo/netstat/service_list/process_list/screenshot/av_detect） */
+  task_type?: string
+  command?: string
+  args?: string[]
+  execute_type?: string
+  timeout?: number
+}
+
+/** 单台会话的下发结果：ok=true 时带 task_id；失败时 error 是服务端原文。 */
+export interface BulkTaskItem {
+  session_id: string
+  ok: boolean
+  task_id?: number
+  error?: string
+}
+
+/** 批量下发汇总：total == succeeded + failed == items.length。 */
+export interface BulkTaskResponse {
+  total: number
+  succeeded: number
+  failed: number
+  items: BulkTaskItem[]
+}

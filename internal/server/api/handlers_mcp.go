@@ -344,7 +344,8 @@ func (s *Server) invokeTool(name string, params map[string]string) (interface{},
 		if err := auth.Validate(); err != nil {
 			return nil, err
 		}
-		p, err := s.startSOCKS5(sid, port, auth)
+		// v1.4.1：创建即落库（与 HTTP POST /tunnels 同一入口），重启后自动恢复。
+		p, err := s.startTunnelPersisted(sid, port, auth, params["remark"])
 		if err != nil {
 			return nil, err
 		}
@@ -369,7 +370,10 @@ func (s *Server) invokeTool(name string, params map[string]string) (interface{},
 		if sid == "" {
 			return nil, fmt.Errorf("session_id required")
 		}
-		s.stopSOCKS5(sid)
+		// v1.4.1：停代理的同时删库——否则下次重启会把操作员主动停掉的代理又恢复出来。
+		if err := s.closeTunnel(sid); err != nil {
+			return nil, err
+		}
 		return map[string]interface{}{"session_id": sid, "status": "stopped"}, nil
 	case "web_search":
 		return webSearch(params["query"])

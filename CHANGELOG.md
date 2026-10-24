@@ -37,6 +37,51 @@
 - 任务失败也保留输出（`FailWithResult`），不再只剩一句错误。
 - `go test ./...` **22 个包全 ok**；两份植入端镜像 **62 个 `.go` 逐文件 SHA-256 一致**。
 
+### 同版追加（参考实现分析落地的三项 + 一处体验修复）
+
+> 这四项来自 `docs/VSHELL-ANALYSIS.md` 的"成本低 / 收益高"清单（B4 / B7 / B8），落地时按补丁纪律处理：**不加新协议、不动帧格式、不改默认值**。
+> 版本号仍是 **1.4.1**（不另起版本）。
+
+**1. 隧道/代理从"内存态"改为持久化 + 重启自动恢复（B4）**
+
+- 根因：`internal/server/api/handlers_tunnels.go` 的 SOCKS5 实例只存在 `s.socks5Servers` 这个 map 里，**服务端进程一重启，操作员手工建的所有代理全丢**（长演练里是实打实的可用性缺陷）。
+- 改法：新增 `tunnels` 表（幂等 DDL，写法同 `database/agent_schema.go`）+ `internal/server/tunnelstore`（库是"应该存在哪些代理"的权威，口令加密落库、绝不回显）+ `handlers_tunnels_restore.go`（`RestoreTunnels()` 按库逐条重建监听）；`cmd/server/main.go` 在 `api.New` 之后注入 store 并调恢复。
+- **硬约束（已实现并真机验证）**：
+  - 单条失败**绝不让进程退出**：标 `status=error` + 中文 `last_error`，其余继续恢复，最后打一条汇总日志；
+  - 端口被占用是最常见的失败原因，必须降级而不是崩；
+  - 带认证的代理若口令解不开，**不重建**（否则等于把带认证的入口静默降级成裸代理），同样标 error。
+- API **只增字段不改语义**：`persisted` / `restored` / `status` / `last_error` / `listening` / `protocol` / `mode` / `remark` / `created_at` / `updated_at`；`DELETE` 后**删库**，再重启不会复活。
+- 真机证据（自建沙箱，端口 18640 / 代理口 11190）：
+  - 创建 → `persisted=true`、11190 在监听；**杀进程重启** → 列表里那条还在、`restored=true`、11190 **重新在监听**，日志 `[tunnel] 已恢复代理：session=… 端口=11190` / `[tunnel] restored 1/1`；
+  - 手工占住 11190 再重启 → **服务端正常启动**、该行 `status=error`、`last_error="端口不可用（可能被其它进程占用）: … bind: Only one usage of each socket address…"`、日志 `restored 0/1 (1 failed: port 11190 in use)`；
+  - `DELETE /tunnels/{id}` → 200、列表清空、端口释放；再重启一次**不再复活**。
+
+**2. 批量任务下发 `POST /api/v1/tasks/bulk` + 会话页多选（B8）**
+
+- 根因：横向阶段"一次给 20 台下发同一条侦察命令"只能循环调 20 次 API / 界面上逐个点；仓库里**没有任何批量 API**。
+- 请求沿用 `createTaskHandler` 的同一套字段（`session_ids` + `task_type/command/args/execute_type/timeout`），响应 `{total, succeeded, failed, items[]}`，每项 `{session_id, ok, task_id|error}`。
+- **语义**：HTTP 200 = 批量已处理（可以全失败）；只有"body 不是合法 JSON"与"`session_ids` 空/缺失/超过 200"才 400。**逐项独立**，单项失败不影响其它项、也不整体 5xx；同一会话重复出现只下发一次。
+- **守卫**：复用 `avops.TaskNoRetry`（破坏性任务 → `destructive_task_forbidden`）+ 侦察类类型白名单（`command/shell/sysinfo/netstat/service_list/process_list/screenshot/av_detect`，其余 → `task_type_not_allowed`）。
+- **审计**：一次被接受的批量 = **一条** `tasks_bulk`（`targets / succeeded / failed / 失败原因分布 / 会话 id`），**不记命令原文**（可能含凭据）；400 不审计。
+- 前端：会话表首列 checkbox（复用原序号列，避免插入新列挤坏 10 列宽度）+ 表头全选/反选（作用于当前过滤结果，支持 indeterminate）；选中 ≥1 出现「已选 N 台 / 批量下发 / 清除选择」；弹窗内**逐行**展示"主机名（会话 id）｜成功·任务 #N"或"失败·服务端 error 原文"。
+- 真机证据：1 个 id → 200 全成功且 `GET /tasks/1` 拿到 `desktop-sfkhr1b\123`；真 id + 不存在 id → 200 部分失败且**失败项之后的成功项照常成功**；空数组 / 201 个 → 400；`edr_blind` → 200 全 `destructive_task_forbidden` 且任务表无该任务；3 次 200 请求 → **恰好 3 条**审计。
+
+**3. 屏幕流投递可观测性（B7）**
+
+- 根因：屏幕帧是一把广播，**没有"投递成功数"、没有"慢消费者丢弃数"**，出问题时前端只表现为黑屏，无从判断是"没人订阅"还是"订阅者太慢"。
+- 改法：`screen_stats.go` 新增聚合计数器（`frames_in / frames_delivered / frames_dropped / limits_hit / subscribers / last_frame_at`，全部 atomic、**不按帧存明细**）；`WSHub` 加一个 **nil 安全、锁外调用**的只读观测回调（`ws_push.go` +24/−0，未注册时行为完全不变），使 `delivered/dropped` 是真实的"帧×订阅者"扇出成功/失败次数。
+- 暴露：`GET /api/v1/system/stats` 与 `GET /api/v1/channels/health` **只追加** `screen_stream` 字段（旧字段逐项不变，有单测逐键断言）。
+- **丢弃必须可见**：限速器丢弃 → 每会话 **1 秒最多 1 条** warning（含 session id + 累计丢弃数）；慢消费者丢弃 → 每秒聚合 1 条（Hub 回调在热路径上，不解析大帧取 session id）。
+- 真机证据：改前 stats 无 `screen_stream`；改后零值字段齐全且旧字段一字不变；用真实 TCP 监听器帧入口 + 真实 WS 订阅注入 3 帧 → `frames_in=3, frames_delivered=3, subscribers=1`；再快速 5 帧 → `limits_hit=4` 且 warning 按 1 秒限频**只有 1 条**。
+- **不做**：不给图像帧加通用压缩（JPEG/PNG 已压缩，二次压缩只烧 CPU）。
+
+**4. 设置页配置分组默认折叠**
+
+- 设置页 4 个分页里的 **10 个配置分组**（通用与服务 / 监听器与回连 / 植入端默认参数 / 载荷构建与签名 / 通知 Webhook / AI 副驾驶 / MCP 服务端 / 账户与鉴权 / 安全与防测绘 / 日志与审计）改为**默认折叠**（`<Section defaultOpen={false}>`），点标题再展开。
+- 动机：一页铺开 10 组、每组十几个控件，滚动找半天；先看标题再按需展开更接近"配置目录"的用法。
+- 边界：只改 `Settings.tsx` 的 10 处调用，`Section` 组件默认值仍是展开（其他页面如生成载荷页不受影响）。
+
+
 ## [v1.4.0] - 2026-09-28（已发布）
 
 **一句话定位**：把 C2 从"能用"推到"能长期稳定用" —— S1~S6 六个阶段 + 两次 AI/agent 修复，每阶段本地验证并与实测数据一并落档；未验证项如实标注（条目见 [ROADMAP.md](ROADMAP.md)）。

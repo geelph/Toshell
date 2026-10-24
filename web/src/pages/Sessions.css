@@ -2525,3 +2525,154 @@
   }
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   v1.4.1 批量下发（会话多选 + 弹窗 + 逐行结果）
+   ───────────────────────────────────────────────────────────────
+   多选复用首列（原序号列）：表格 10 列的宽度由上面的 nth-child 规则决定，
+   新增一列会让后面所有列整体错位，而序号对批量操作没有信息量。
+   ═══════════════════════════════════════════════════════════════ */
+
+.sessions-page .session-select-col {
+  text-align: center;
+}
+
+.sessions-page .session-select-col input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  vertical-align: middle;
+  accent-color: var(--color-primary);
+  cursor: pointer;
+}
+
+.sessions-page .sessions-selected {
+  font-size: var(--fs-sm);
+  color: var(--color-primary);
+  font-weight: 600;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.sessions-page .bulk-dispatch-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: var(--sp-2) var(--sp-3);
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--color-primary);
+  color: #fff;
+  font-size: var(--fs-base);
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--transition);
+}
+
+.sessions-page .bulk-dispatch-btn:hover:not(:disabled) {
+  background: var(--color-primary-hover);
+}
+
+.sessions-page .bulk-clear-btn {
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color var(--transition), color var(--transition);
+}
+
+.sessions-page .bulk-clear-btn:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+/* 弹窗主体：比通用 .modal 宽一些，容得下逐行结果 */
+.bulk-modal {
+  width: 92vw;
+  max-width: 720px;
+}
+
+.bulk-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.bulk-form-row {
+  display: flex;
+  gap: var(--sp-3);
+}
+
+.bulk-form-row > .ui-field {
+  flex: 1;
+  min-width: 0;
+}
+
+.bulk-error {
+  margin-top: var(--sp-3);
+}
+
+.bulk-result {
+  margin-top: var(--sp-3);
+}
+
+.bulk-result-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-2);
+  font-size: var(--fs-sm);
+  color: var(--color-text-secondary);
+}
+
+.bulk-result-list {
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.bulk-result-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--color-border);
+  font-size: var(--fs-sm);
+}
+
+.bulk-result-row:last-child {
+  border-bottom: none;
+}
+
+.bulk-result-row .bulk-sid {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bulk-result-row .bulk-ok,
+.bulk-result-head .bulk-ok {
+  color: var(--color-success);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.bulk-result-row .bulk-err,
+.bulk-result-head .bulk-err {
+  color: var(--color-danger);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  word-break: break-all;
+}
+
+.bulk-result-head .bulk-err {
+  white-space: nowrap;
+}
+

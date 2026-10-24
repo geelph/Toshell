@@ -17,6 +17,8 @@ export function Tunnels() {
     // 认证可选：留空 = 不启用认证（保持历史行为）。口令只用于创建请求，不回显。
     auth_user: '',
     auth_pass: '',
+    // v1.4.1：备注随隧道一起落库，服务端重启恢复后仍能在列表里看到。
+    remark: '',
   })
   const [creating, setCreating] = useState(false)
   const [closingId, setClosingId] = useState<string | null>(null)
@@ -136,7 +138,8 @@ export function Tunnels() {
     }
 
     setCreating(true)
-    const result = await createTunnel(formData.session_id, formData.local_port, user, pass)
+    const remark = formData.remark.trim()
+    const result = await createTunnel(formData.session_id, formData.local_port, user, pass, remark || undefined)
     setCreating(false)
 
     if (result.success) {
@@ -154,7 +157,7 @@ export function Tunnels() {
           ? `SOCKS5代理已启动，端口: ${result.local_port}（已启用用户名/口令认证）`
           : `SOCKS5代理已启动，端口: ${result.local_port}（未启用认证）`,
       )
-      setFormData({ session_id: '', local_port: 1080, auth_user: '', auth_pass: '' })
+      setFormData({ session_id: '', local_port: 1080, auth_user: '', auth_pass: '', remark: '' })
     } else {
       toast.error(`创建失败: ${result.error}`)
     }
@@ -292,13 +295,25 @@ export function Tunnels() {
                 maxLength={255}
               />
             </div>
+            <div className="form-group">
+              <label>备注（可选）</label>
+              <input
+                type="text"
+                autoComplete="off"
+                value={formData.remark}
+                onChange={(e) => setFormData({ ...formData, remark: e.target.value })}
+                placeholder="例如：内网 10.0.0.0/8 出口"
+                maxLength={200}
+              />
+            </div>
           </div>
           <p className="form-hint">
             创建SOCKS5代理后，可通过该代理访问植入端的内网资源。<br/>
             使用方法: 配置代理为 socks5://127.0.0.1:{formData.local_port}
             {formData.auth_user ? `（认证用户 ${formData.auth_user}，口令需在客户端填写）` : ''}<br/>
             认证为可选：<b>仅 SOCKS5 客户端需要填</b>，留空即无认证（老客户端照旧可用）。
-            口令只用于配置代理监听器，保存后不会回显；日志里只记录"是否启用认证"。
+            口令只用于配置代理监听器，保存后不会回显；日志里只记录"是否启用认证"。<br/>
+            代理已持久化：<b>服务端重启后会自动恢复</b>，恢复出来的条目会标注"已恢复"，无需手工重建。
           </p>
           <div className="form-actions">
             <button className="btn-secondary" onClick={() => setShowCreate(false)}>取消</button>
@@ -341,10 +356,33 @@ export function Tunnels() {
                   </span>
                 </div>
                 <div className="socks5-actions">
-                  <span className="socks5-status active">
-                    <span className="status-dot"></span>
-                    运行中
-                  </span>
+                  {/* 状态（v1.4.1 追加字段）：运行态优先；老服务端没有这些字段时按运行中展示 */}
+                  {server.status === 'error' ? (
+                    <span className="socks5-status error" title={server.last_error || '恢复失败'}>
+                      <span className="status-dot"></span>
+                      恢复失败
+                    </span>
+                  ) : server.listening === false ? (
+                    <span className="socks5-status inactive" title={server.last_error || '当前未监听'}>
+                      <span className="status-dot"></span>
+                      未监听
+                    </span>
+                  ) : (
+                    <span className="socks5-status active">
+                      <span className="status-dot"></span>
+                      运行中
+                    </span>
+                  )}
+                  {server.restored && (
+                    <span className="socks5-auth on" title="服务端重启后按数据库自动恢复，无需手工重建">
+                      已恢复
+                    </span>
+                  )}
+                  {server.persisted === false && (
+                    <span className="socks5-auth off" title="未落库：服务端重启后会丢失，请检查数据库/加密密钥">
+                      未持久化
+                    </span>
+                  )}
                   <button 
                     className="btn-secondary"
                     onClick={() => {
@@ -372,6 +410,15 @@ export function Tunnels() {
               <div className="socks5-session">
                 会话: {server.session_id.slice(0, 16)}...
               </div>
+              {server.remark && (
+                <div className="socks5-remark">备注: {server.remark}</div>
+              )}
+              {server.status === 'error' && server.last_error && (
+                <div className="socks5-error">
+                  恢复失败原因: {server.last_error}
+                  （该条已标记 error，其余代理不受影响；释放端口后重启服务端即可重试）
+                </div>
+              )}
             </div>
           ))
         )}
@@ -393,6 +440,24 @@ export function Tunnels() {
                   <span className="info-label">代理端口:</span>
                   <span className="info-value">{selectedServer.local_port}</span>
                 </div>
+                <div className="info-item">
+                  <span className="info-label">状态:</span>
+                  <span className="info-value">
+                    {selectedServer.status === 'error'
+                      ? '恢复失败（详见列表里的原因）'
+                      : selectedServer.listening === false
+                        ? '未监听'
+                        : '运行中'}
+                    {selectedServer.restored ? ' · 重启后自动恢复' : ''}
+                    {selectedServer.persisted === false ? ' · 未持久化（重启会丢）' : ''}
+                  </span>
+                </div>
+                {selectedServer.remark && (
+                  <div className="info-item">
+                    <span className="info-label">备注:</span>
+                    <span className="info-value">{selectedServer.remark}</span>
+                  </div>
+                )}
                 <div className="info-item">
                   <span className="info-label">会话ID:</span>
                   <span className="info-value">{selectedServer.session_id.slice(0, 20)}...</span>

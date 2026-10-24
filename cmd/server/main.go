@@ -30,6 +30,7 @@ import (
 	"toshell/internal/server/plugin"
 	"toshell/internal/server/session"
 	"toshell/internal/server/task"
+	"toshell/internal/server/tunnelstore"
 	"toshell/internal/server/webhook"
 )
 
@@ -300,6 +301,26 @@ func NewServer(cfgPath string) (*Server, error) {
 		apiServer.StartAgentTaskRecovery()
 	}
 
+	// ── 隧道/代理持久化 + 重启恢复（v1.4.1）──
+	// v1.4.0 及之前 SOCKS5 代理只活在内存里，服务端一重启全丢。现在创建即落库，
+	// 启动时按库逐条重建监听：端口被占用只把这行标 error 并记录原因，绝不让进程退出。
+	// 无库（或加密密钥不可用）时降级为内存态，行为等同 v1.4.0。
+	if db != nil {
+		if ts, terr := tunnelstore.New(db.SQL(), []byte(cfg.Listener.EncryptionKey)); terr != nil {
+			logging.Warn("server", "隧道持久化不可用（代理将只在内存中，重启后丢失）：%v", terr)
+		} else {
+			if !ts.AuthEncryptionAvailable() {
+				// 密钥长度配错只影响"带认证"的代理，不该让无认证代理也失去恢复能力。
+				logging.Warn("server", "代理口令加密不可用（listener.encryption_key 长度须为 16/24/32 字节）：带认证的代理将无法落库/恢复，无认证代理不受影响")
+			}
+			apiServer.SetTunnelStore(ts)
+			restored, failed := apiServer.RestoreTunnels()
+			if restored+failed > 0 {
+				logging.Info("server", "隧道恢复完成：成功 %d 条，失败 %d 条（失败行已标记 error，可在隧道页查看原因）", restored, failed)
+			}
+		}
+	}
+
 	// 注入嵌入式前端文件系统（单二进制部署时嵌入 web/dist）。
 	// embed.FS 与 http.FileServer 存在路径规范化冲突：FileServer 传入以 "/" 开头的路径，
 	// 而 http.FS(embed.FS) 内部会做 fs.ValidPath 校验（要求不以 "/" 开头），
@@ -331,6 +352,9 @@ func NewServer(cfgPath string) (*Server, error) {
 			apiServer.BroadcastSessionOffline(sessionID)
 		})
 		tcpListener.SetOnSessionOnline(func(info *types.SessionInfo) {
+			// 重启恢复出来的代理在植入端回连前没有下行处理器（回包会被静默丢弃），
+			// 这里在会话（重新）上线时补绑——幂等，没有对应代理时直接返回。
+			apiServer.RebindTunnelHandler(info.ID)
 			// 只有真实状态变化（首次上线 / 观察窗外的复活）才发上线通知，
 			// 避免闪断重连重复推送（广播去抖见 session_broadcast.go）
 			if apiServer.BroadcastSessionOnline(info) {
@@ -346,6 +370,8 @@ func NewServer(cfgPath string) (*Server, error) {
 			apiServer.BroadcastSessionOffline(sessionID)
 		})
 		httpListener.SetOnSessionOnline(func(info *types.SessionInfo) {
+			// 同上：会话上线时补绑重启恢复出来的代理的回包通道。
+			apiServer.RebindTunnelHandler(info.ID)
 			if apiServer.BroadcastSessionOnline(info) {
 				webhookNotifier.NotifyOnline(info)
 			}

@@ -24,6 +24,7 @@ import (
 	"toshell/internal/server/modules"
 	"toshell/internal/server/session"
 	"toshell/internal/server/task"
+	"toshell/internal/server/tunnelstore"
 )
 
 // ─── Core Types ────────────────────────────────────────────────────────────────
@@ -187,6 +188,10 @@ type Server struct {
 	copilot       *ai.Copilot        // AI 副驾驶（LLM 聊天 + 工具调用；nil = 未配置）
 	playbookR     *ai.PlaybookRunner // 剧本化执行引擎（确定性攻击链）
 	agentMgr      *ai.AgentManager   // 异步自主 Agent 运行时（run 生命周期 + 并发上限）
+	// tunnelStore 隧道/代理的持久化层（v1.4.1，见 handlers_tunnels.go）：
+	// 库是"应该存在哪些代理"的权威，重启由 RestoreTunnels 按库重建监听。
+	// nil = 无库降级：代理只存在内存里（行为等同 v1.4.0，重启即丢），API 用 persisted=false 明示。
+	tunnelStore *tunnelstore.Store
 	// onConfigApplied 配置保存并热应用后的回调（由服务器主循环注册，
 	// 用于通知各组件如 HTTP listener 拟态模板切换）。
 	onConfigApplied func(cfg *config.Config)
@@ -329,6 +334,14 @@ func (s *Server) UnregisterRuntimeListener(id string) bool {
 	r.mu.Unlock()
 	r.unregister(id)
 	return exists
+}
+
+// SetTunnelStore 注入隧道持久化层（v1.4.1，main.go 在 api.New 之后调用）。
+//
+// 不注入（或注入失败）时服务照常启动，只是代理恢复退化为 v1.4.0 的内存态。
+// 与 SetAgentStore 同一模式：DB 连接的生命周期归 database 包，本包只持有 CRUD 句柄。
+func (s *Server) SetTunnelStore(store *tunnelstore.Store) {
+	s.tunnelStore = store
 }
 
 // StopSOCKS5ForSession 停止指定 session 的 SOCKS5 代理服务器（session 断连时调用）
@@ -521,6 +534,7 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/tasks", s.listTasksHandler).Methods("GET")
 	api.HandleFunc("/tasks/stats", s.taskStatsHandler).Methods("GET")
 	api.HandleFunc("/tasks", s.createTaskHandler).Methods("POST")
+	api.HandleFunc("/tasks/bulk", s.bulkTasksHandler).Methods("POST")
 	api.HandleFunc("/tasks/{id}", s.getTaskHandler).Methods("GET")
 	api.HandleFunc("/tasks/{id}", s.deleteTaskHandler).Methods("DELETE")
 	api.HandleFunc("/tasks/{id}/cancel", s.cancelTaskHandler).Methods("POST")

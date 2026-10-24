@@ -624,7 +624,7 @@ export function Settings() {
 
             {/* ══ 通用与服务（改端口 / 主机后需重启服务端生效） ══ */}
             {page === 'general' && (
-              <Section
+              <Section defaultOpen={false}
                 title="通用与服务"
                 desc="控制台/REST API 的监听地址、心跳超时与写队列参数。"
                 badge={<Badge tone="warn">需重启</Badge>}
@@ -671,7 +671,7 @@ export function Settings() {
 
             {/* ══ 监听器与回连 ══ */}
             {page === 'general' && (
-              <Section title="监听器与回连" desc="监听器开关、绑定地址与流量拟态（保存后热生效；改端口需重启监听器）。">
+              <Section defaultOpen={false} title="监听器与回连" desc="监听器开关、绑定地址与流量拟态（保存后热生效；改端口需重启监听器）。">
                 <div className="settings-grid">
                   <Check
                     label="启用监听器"
@@ -748,7 +748,7 @@ export function Settings() {
 
             {/* ══ 植入端与载荷构建 ══ */}
             {page === 'implant' && (
-              <Section title="植入端默认参数" desc="影响后续构建的默认值（生成载荷时可在构建页覆盖）。">
+              <Section defaultOpen={false} title="植入端默认参数" desc="影响后续构建的默认值（生成载荷时可在构建页覆盖）。">
                 <div className="settings-grid">
                   <Field label="心跳间隔(秒)" hint="默认心跳/轮询间隔">
                     <input
@@ -832,7 +832,7 @@ export function Settings() {
 
             {/* ══ 载荷构建与签名 ══ */}
             {page === 'implant' && (
-              <Section
+              <Section defaultOpen={false}
                 title="载荷构建与签名（builder）"
                 desc="C 植入端编译工具链与 Authenticode 代码签名；字段与 server.yaml 的 builder: 段一一对应。"
                 badge={<Badge tone="accent">签名</Badge>}
@@ -935,7 +935,7 @@ export function Settings() {
 
             {/* ══ 通知 Webhook ══ */}
             {page === 'integrations' && (
-              <Section title="通知 Webhook" desc="会话上线推送钉钉/企业微信/飞书/Slack/Discord（保存后热生效）。">
+              <Section defaultOpen={false} title="通知 Webhook" desc="会话上线推送钉钉/企业微信/飞书/Slack/Discord（保存后热生效）。">
                 <div className="settings-grid">
                   <Check
                     label="新会话通知"
@@ -1009,7 +1009,7 @@ export function Settings() {
 
             {/* ══ AI 副驾驶 ══ */}
             {page === 'integrations' && (
-              <Section title="AI 副驾驶" desc="LLM（OpenAI 兼容 chat/completions）配置，保存后热生效。">
+              <Section defaultOpen={false} title="AI 副驾驶" desc="LLM（OpenAI 兼容 chat/completions）配置，保存后热生效。">
                 <div className="settings-grid">
                   <Check
                     label="启用"
@@ -1147,7 +1147,7 @@ export function Settings() {
 
             {/* ══ MCP 服务端（对外暴露内部工具表；默认关闭、只绑回环、需 token）══ */}
             {page === 'integrations' && (
-              <Section
+              <Section defaultOpen={false}
                 title="MCP 服务端"
                 desc="把内部工具表通过 Model Context Protocol 暴露给外部 MCP 客户端（Claude Desktop / Cursor 等）。默认关闭、默认只绑回环；所有字段改动都需重启服务端才生效。"
                 badge={
@@ -1367,7 +1367,7 @@ export function Settings() {
 
             {/* ══ 账户与鉴权 ══ */}
             {page === 'account' && (
-              <Section title="账户与鉴权" desc="控制台登录账户、认证方式与 API 密钥。">
+              <Section defaultOpen={false} title="账户与鉴权" desc="控制台登录账户、认证方式与 API 密钥。">
                 <div className="settings-grid">
                   <Field label="用户名" hint="登录用户名（热生效）">
                     <input
@@ -1445,7 +1445,7 @@ export function Settings() {
 
             {/* ══ 安全与防测绘 ══ */}
             {page === 'general' && (
-              <Section title="安全与防测绘（控制台防护）" desc="前置认证与来源白名单：只作用于控制台与管理 API，植入端回连不受影响。">
+              <Section defaultOpen={false} title="安全与防测绘（控制台防护）" desc="前置认证与来源白名单：只作用于控制台与管理 API，植入端回连不受影响。">
                 <Callout tone="info" title="不影响植入端">
                   开启后访问控制台需先通过浏览器认证框，阻止 Fofa/Quake/Hunter 等资产测绘引擎抓取并收录本资产；
                   已持有 API Key 的脚本与 AI 调用不受影响；<b>植入端回连不受影响</b>。
@@ -1528,7 +1528,7 @@ export function Settings() {
 
             {/* ══ 日志与审计 ══ */}
             {page === 'general' && (
-              <Section
+              <Section defaultOpen={false}
                 title="日志与审计"
                 desc="服务端日志级别与格式（保存后热生效）；登录审计请到「登录日志」页查看。"
                 badge={<Badge>热生效</Badge>}

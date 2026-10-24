@@ -160,6 +160,10 @@ func (d *Database) initTables() error {
 	// 全部 CREATE ... IF NOT EXISTS，对既有库幂等，不做破坏性 DDL。
 	queries = append(queries, AgentSchemaStatements...)
 
+	// v1.4.1：隧道/代理持久化（DDL 见 tunnel_schema.go）。
+	// 让 SOCKS5 代理在服务端重启后能按库自动恢复，而不是只剩内存态。
+	queries = append(queries, TunnelSchemaStatements...)
+
 	for _, query := range queries {
 		if _, err := d.db.Exec(query); err != nil {
 			return err
