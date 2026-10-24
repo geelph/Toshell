@@ -5,82 +5,38 @@
 
 ## [v1.4.1] - 2026-10-24（补丁版）
 
-**一句话定位**：**只修"看得见、用不了"的缺陷**（显示 / 代理认证 / 预览安全 / Linux 载荷构建），不引入新攻击能力、不动协议帧格式、不改任何默认值；另交付一份 Rust 植入端可行性结论与一份参考实现分析。
+**一句话定位**：只修"看得见、用不了"的缺陷，另落三项"取参考实现精华"的可用性改进；不加新协议、不动协议帧格式、不改默认值。
 
-**本版摘要**（一行一项）
-- **显示**：Linux 会话用户名不再一律 `unknown`（`USER→LOGNAME→SUDO_USER` → `/etc/passwd` → `uid:<n>`）；杀软击杀与启动项回显的乱码修掉（根因是**整串** GBK 转换，交互回执是"UTF-8 中文 + GBK 工具输出"的混合串）。
-- **代理认证**：创建 SOCKS5 代理时可选填**用户名/口令**（RFC 1929），HTTP CONNECT 路径同样校验 `Proxy-Authorization`（否则可绕过）；**留空 = 原行为**，回执与日志不回显口令。
-- **文件预览**：按后缀白名单限制，未识别/禁用后缀**弹窗提示**（可选"仍要预览前 N KB"或下载）；**服务端二次校验**（二进制嗅探 + 图片魔数），超大只给前缀并标 `truncated`。
-- **Linux/amd64 载荷**：修掉 `light` 档在非 Windows 上**编译不过**；修掉混淆器把 `const` 字符串改坏导致**全平台构建失败**；新增**构建期通道一致性拦截**，把"协议与监听器通道不一致"这类必然"连上即断"的载荷挡在构建时。
-- **Rust 植入端**：给结论（可行）并**实测体积**：`light` 等价物 **350,720 B**（Go 同形态 2,946,805 B，**小 8.4 倍**），`light+http` 走 Windows SChannel 的 TLS 增量仅 **17,408 B**。立项 v1.6，本版**不写产品代码**。
-- **文档**：新增 `docs/VSHELL-ANALYSIS.md`（参考实现对比与取舍，含许可证红线）、`docs/RUST-IMPLANT.md`、`docs/rust-probe/`（可复现探针）；`ROADMAP.md` 整体重写。
+**本版摘要**
+- **显示**：Linux 会话用户名不再一律 `unknown`（`USER→LOGNAME→SUDO_USER` → `/etc/passwd` → `uid:<n>`）；杀软击杀与启动项回显的乱码修掉 —— 根因是对**整串**输出做 GBK 转换，而回执是"UTF-8 中文 + GBK 工具输出"的混合串，现改**逐行**判定。
+- **代理认证**：创建 SOCKS5 代理可选填用户名/口令（RFC 1929），HTTP CONNECT 路径同样校验；留空＝原行为，回执与日志不回显口令。
+- **文件预览**：按后缀白名单限制，未识别/禁用后缀弹窗提示（可前缀预览或下载）；服务端二次校验（二进制嗅探 + 图片魔数）；下载通道强制 `attachment + nosniff + CSP sandbox`。
+- **Linux/amd64 载荷**：修掉 `light` 档在非 Windows 上编译不过；修掉混淆器改写 `const` 导致全平台构建失败；新增构建期"协议↔监听器通道一致性"拦截（这类载荷必然连上即断）；`transport` 收敛为单一口径。
+- **代理持久化**：SOCKS5 代理落库 + 启动按库重建监听 —— 不再"进程重启即丢"；端口被占用时**不崩**（标 `error` + 原因），`DELETE` 后重启不复活。
+- **批量下发**：`POST /api/v1/tasks/bulk` + 会话页多选；逐项返回成功/失败（单项失败不影响其它项），一次批量 = 一条审计；上限 200，破坏性任务服务端拒绝。
+- **屏幕流可观测**：`/system/stats` 与 `/channels/health` 追加 `screen_stream`（收帧/投递/丢弃/限速丢弃/订阅者/最后帧时间），黑屏时能区分"没人订阅"与"订阅者太慢"；丢弃打断频 warning；不给图像帧加压缩。
+- **设置页**：4 个分页里的 10 个配置分组默认折叠，点标题再展开。
+- **Rust 植入端**：结论**可行**并实测体积 —— `light` 等价物 **350,720 B**（Go 同形态 2,946,805 B，小 8.4 倍），`light+http` 走 Windows SChannel 的 TLS 增量仅 **17,408 B**；立项 v1.6，本版不写产品代码。
+- **文档**：新增 `docs/VSHELL-ANALYSIS.md`（含许可证红线：只吸收设计、不搬代码）、`docs/RUST-IMPLANT.md`、`docs/rust-probe/`；`ROADMAP.md` 重写。
 
-| 项 | 根因（file:line） | 改法 | 实测 |
-|---|---|---|---|
-| Linux 用户名 `unknown` | `implant/platform_unix.go:13` 只读 `USER/USERNAME`，无登录环境（systemd / cron / `docker exec` / ssh 命令）为空 | 新增 `implant/username.go`：环境变量链 → `os.Getuid()` + 解析 `/etc/passwd` → `uid:<n>` → 最后才 `unknown`；纯函数可喂假内容单测 | 单测覆盖 uid = -1/0/1000/4242 与读失败；linux 载荷构建 200 |
-| 击杀 / 启动项乱码 | `implant/main.go:1811`（旧）对**整串**输出无条件 GBK 转换，而回执是 UTF-8 中文 + GBK 工具输出的混合串 | 植入端新增 `decodeConsoleText`（**逐行**判 UTF-8，合法行原样、非法行才转，对 UTF-8 幂等）；服务端补唯一展示漏斗 `api/output_display.go`（UTF-8 → GBK → 仍非法则显式标注 + 十六进制预览） | 前后对比：`[+] 鎸佷箙鍖栨垚鍔?` → `[+] 持久化成功`；`== EDR Kill (鍑绘潃) ==` → `== EDR Kill (击杀) ==`，同一串里的 taskkill 报错仍正确 |
-| 启动项回显结构 | `persistence list` 直接回 `json.Marshal(methods)` | 输出固定字段序的管道表（表头恒非空 + 末尾方法数） | 6 行可读表格 |
-| 代理认证 | 旧 SOCKS5 握手只接受 `0x00`（无认证），无 RFC 1929 分支 | 新增 `internal/common/tunnel/auth.go`（字段校验、常量时间比较、子协商、HTTP Basic）；`createTunnelHandler` 增可选 `auth_user`/`auth_pass`，回执只给 `auth_enabled` | `[05 01 00]`→`05 ff`；正确口令 `05 02`+`01 00`；错误口令 `01 01`；HTTP 无凭据 407、有凭据 200；`curl --socks5` 三态与协议层一致 |
-| 文件预览 | 旧预览在前端嗅探，未识别/二进制只会静默显示"无法预览" | 新增 `internal/common/preview`（白名单/黑名单/未识别/阈值/二进制嗅探/图片魔数）+ `GET /files/preview-policy` + `POST /sessions/{id}/files/preview`；前端 `previewPolicy.ts` 与弹窗；`/files/transfer` 强制 `attachment + nosniff + CSP sandbox` | `.log/.png` 200；`.exe/.zip` 415；`.xyz/.svg` 409（force 后 200）；2 MB 文本 200 且 `truncated=true`；伪装二进制 `.txt` 415；HTML 内容 `.png` 415 |
-| Linux 载荷两处编译 bug | ① `blob_unix.go:1` 标签只有 `!windows`，与 `features_stub_light.go`（light）重复定义 `runMappedImage`；② 混淆器把 `const` 字面量改写为 `xd(...)` 后不是常量 | ① 标签改 `!windows && !light` + 新增 `blob_unix_light.go`；② 新增 `inConstDecl()` 覆盖单行/缩进/分组 `const` | 72 组（GOOS×transport×profile×tag）重复声明矩阵测试（含负向验证）；linux light tcp 3,273,099 B、full tcp 3,309,963 B 构建 200 |
-| 「秒断」根因收敛 | 通道与监听器类型不匹配 → 0 ms RST → 无限重连（实测向 TCP 监听器发 `POST` 得到 `forcibly closed`） | 新增构建期拦截 `listenerChannelMismatch`（协议与监听器通道不一致直接 400 并说明原因）；`transport` 单一口径 `resolveTransport`（编译 tag 与配置块不再来自两个来源）；`GET /builders` 的 `protocols` 补上漏掉的 `tcp` | 实测向 TCP 监听器发 HTTP POST → `elapsed=0s` 被关连接；构建器与 API 测试全绿 |
+**关键实测**
+- 代理认证：`[05 01 00]`→`05 ff`；错口令 `01 01`；HTTP 无凭据 407 / 有凭据 200。
+- 乱码前后：`[+] 鎸佷箙鍖栨垚鍔?` → `[+] 持久化成功`；`== EDR Kill (鍑绘潃) ==` → `(击杀)`。
+- 预览：`.exe/.zip` 415；`.xyz/.svg` 409（force 后 200）；2 MB 文本 `truncated=true`；伪装图片 415。
+- 隧道：重启后 `restored=true` 且端口重新监听；占端口时日志 `restored 0/1 (1 failed: port 11190 in use)` 且服务端存活。
+- 批量：真 id + 不存在 id → 200 部分失败，成功项照常拿到结果；`edr_blind` 全被拒。
+- 屏幕流：3 帧 → `frames_in=3, frames_delivered=3`；快速 5 帧 → `limits_hit=4`，warning 仅 1 条。
 
-**如实边界（本版没做到的）**
-- **Linux 运行时未验证**：本机无 WSL/Docker/Linux，只到"构建期 + 纯函数单测 + 静态 ELF 检查"这一层；"启动即 panic / 被 EDR 杀"**证伪不了**。
-- **历史乱码不可回溯**：旧载荷产生的是"合法但错误的 UTF-8"（`鍑绘潃`），服务端无法判定与逆转；**只有重新部署新载荷后的新结果正确**。另：JSON 结果通道本身承载不了非法 UTF-8（`json.Marshal` 会替换成 U+FFFD），真正的修复点必须在客户端（已做），服务端展示层只兜旧数据/其它来源。
-- **代理认证只在 C2 侧的 SOCKS5 监听器**：植入端是原始 TCP 中继、不解析 SOCKS5，因此不存在"老植入端不支持"的协议兼容问题；请求了认证但服务端没开启时，前端**fail-closed**（自动停掉该代理并报错），不会静默降级成无认证。
-- **预览是同步等待**（25 s 超时，>64 MB 直接 413）；超大文本只回前 64 KB，但**植入端仍会回传整个文件**（下载链路没有 range 读取，属既有设计）。
-- **Rust 植入端只有可行性结论与体积探针**，没有产品代码；`full` 档体积（650 KB~1 MB）是**推导值**，必须等实做完再替换成实测值。
+**如实边界**
+- **Linux 运行时未验证**（本机无 WSL/Docker）：只到"构建期 + 纯函数单测 + 静态 ELF 检查"，"启动即 panic / 被 EDR 杀"证伪不了。
+- **历史乱码不可回溯**：旧载荷产物是"合法但错误的 UTF-8"，只有重新部署新载荷后的新结果正确。
+- **代理认证在 C2 侧监听器**（植入端只是 TCP 中继，不解析 SOCKS5）；请求了认证但服务端未开启时前端 fail-closed，不静默降级。
+- **批量下发是补丁版里唯一新增的对外 API**，已在 ROADMAP 记账；其 400（非法请求）不写审计。
+- **屏幕流**：`frames_dropped` 只覆盖订阅者 send 缓冲满（`WriteMessage` 写失败未计入）；未用真实植入端采集载荷验证。
+- **预览**：25 s 同步超时、>64 MB 直接 413；超大文本只回前 64 KB，但植入端仍回传整文件（无 range 读取）。
+- **Rust**：`full` 档 650 KB~1 MB 是**推导值**；`docs/rust-probe/` 是可复现探针，不是产品代码。
 
-**其它**
-- 新增 `GET /api/v1/tasks/{id}?raw=1`：无损回读原始输出（`output_b64` / `output_bytes` / `output_is_binary`），展示层转换不再有"看不回原文"的代价。
-- 任务失败也保留输出（`FailWithResult`），不再只剩一句错误。
-- `go test ./...` **22 个包全 ok**；两份植入端镜像 **62 个 `.go` 逐文件 SHA-256 一致**。
-
-### 同版追加（参考实现分析落地的三项 + 一处体验修复）
-
-> 这四项来自 `docs/VSHELL-ANALYSIS.md` 的"成本低 / 收益高"清单（B4 / B7 / B8），落地时按补丁纪律处理：**不加新协议、不动帧格式、不改默认值**。
-> 版本号仍是 **1.4.1**（不另起版本）。
-
-**1. 隧道/代理从"内存态"改为持久化 + 重启自动恢复（B4）**
-
-- 根因：`internal/server/api/handlers_tunnels.go` 的 SOCKS5 实例只存在 `s.socks5Servers` 这个 map 里，**服务端进程一重启，操作员手工建的所有代理全丢**（长演练里是实打实的可用性缺陷）。
-- 改法：新增 `tunnels` 表（幂等 DDL，写法同 `database/agent_schema.go`）+ `internal/server/tunnelstore`（库是"应该存在哪些代理"的权威，口令加密落库、绝不回显）+ `handlers_tunnels_restore.go`（`RestoreTunnels()` 按库逐条重建监听）；`cmd/server/main.go` 在 `api.New` 之后注入 store 并调恢复。
-- **硬约束（已实现并真机验证）**：
-  - 单条失败**绝不让进程退出**：标 `status=error` + 中文 `last_error`，其余继续恢复，最后打一条汇总日志；
-  - 端口被占用是最常见的失败原因，必须降级而不是崩；
-  - 带认证的代理若口令解不开，**不重建**（否则等于把带认证的入口静默降级成裸代理），同样标 error。
-- API **只增字段不改语义**：`persisted` / `restored` / `status` / `last_error` / `listening` / `protocol` / `mode` / `remark` / `created_at` / `updated_at`；`DELETE` 后**删库**，再重启不会复活。
-- 真机证据（自建沙箱，端口 18640 / 代理口 11190）：
-  - 创建 → `persisted=true`、11190 在监听；**杀进程重启** → 列表里那条还在、`restored=true`、11190 **重新在监听**，日志 `[tunnel] 已恢复代理：session=… 端口=11190` / `[tunnel] restored 1/1`；
-  - 手工占住 11190 再重启 → **服务端正常启动**、该行 `status=error`、`last_error="端口不可用（可能被其它进程占用）: … bind: Only one usage of each socket address…"`、日志 `restored 0/1 (1 failed: port 11190 in use)`；
-  - `DELETE /tunnels/{id}` → 200、列表清空、端口释放；再重启一次**不再复活**。
-
-**2. 批量任务下发 `POST /api/v1/tasks/bulk` + 会话页多选（B8）**
-
-- 根因：横向阶段"一次给 20 台下发同一条侦察命令"只能循环调 20 次 API / 界面上逐个点；仓库里**没有任何批量 API**。
-- 请求沿用 `createTaskHandler` 的同一套字段（`session_ids` + `task_type/command/args/execute_type/timeout`），响应 `{total, succeeded, failed, items[]}`，每项 `{session_id, ok, task_id|error}`。
-- **语义**：HTTP 200 = 批量已处理（可以全失败）；只有"body 不是合法 JSON"与"`session_ids` 空/缺失/超过 200"才 400。**逐项独立**，单项失败不影响其它项、也不整体 5xx；同一会话重复出现只下发一次。
-- **守卫**：复用 `avops.TaskNoRetry`（破坏性任务 → `destructive_task_forbidden`）+ 侦察类类型白名单（`command/shell/sysinfo/netstat/service_list/process_list/screenshot/av_detect`，其余 → `task_type_not_allowed`）。
-- **审计**：一次被接受的批量 = **一条** `tasks_bulk`（`targets / succeeded / failed / 失败原因分布 / 会话 id`），**不记命令原文**（可能含凭据）；400 不审计。
-- 前端：会话表首列 checkbox（复用原序号列，避免插入新列挤坏 10 列宽度）+ 表头全选/反选（作用于当前过滤结果，支持 indeterminate）；选中 ≥1 出现「已选 N 台 / 批量下发 / 清除选择」；弹窗内**逐行**展示"主机名（会话 id）｜成功·任务 #N"或"失败·服务端 error 原文"。
-- 真机证据：1 个 id → 200 全成功且 `GET /tasks/1` 拿到 `desktop-sfkhr1b\123`；真 id + 不存在 id → 200 部分失败且**失败项之后的成功项照常成功**；空数组 / 201 个 → 400；`edr_blind` → 200 全 `destructive_task_forbidden` 且任务表无该任务；3 次 200 请求 → **恰好 3 条**审计。
-
-**3. 屏幕流投递可观测性（B7）**
-
-- 根因：屏幕帧是一把广播，**没有"投递成功数"、没有"慢消费者丢弃数"**，出问题时前端只表现为黑屏，无从判断是"没人订阅"还是"订阅者太慢"。
-- 改法：`screen_stats.go` 新增聚合计数器（`frames_in / frames_delivered / frames_dropped / limits_hit / subscribers / last_frame_at`，全部 atomic、**不按帧存明细**）；`WSHub` 加一个 **nil 安全、锁外调用**的只读观测回调（`ws_push.go` +24/−0，未注册时行为完全不变），使 `delivered/dropped` 是真实的"帧×订阅者"扇出成功/失败次数。
-- 暴露：`GET /api/v1/system/stats` 与 `GET /api/v1/channels/health` **只追加** `screen_stream` 字段（旧字段逐项不变，有单测逐键断言）。
-- **丢弃必须可见**：限速器丢弃 → 每会话 **1 秒最多 1 条** warning（含 session id + 累计丢弃数）；慢消费者丢弃 → 每秒聚合 1 条（Hub 回调在热路径上，不解析大帧取 session id）。
-- 真机证据：改前 stats 无 `screen_stream`；改后零值字段齐全且旧字段一字不变；用真实 TCP 监听器帧入口 + 真实 WS 订阅注入 3 帧 → `frames_in=3, frames_delivered=3, subscribers=1`；再快速 5 帧 → `limits_hit=4` 且 warning 按 1 秒限频**只有 1 条**。
-- **不做**：不给图像帧加通用压缩（JPEG/PNG 已压缩，二次压缩只烧 CPU）。
-
-**4. 设置页配置分组默认折叠**
-
-- 设置页 4 个分页里的 **10 个配置分组**（通用与服务 / 监听器与回连 / 植入端默认参数 / 载荷构建与签名 / 通知 Webhook / AI 副驾驶 / MCP 服务端 / 账户与鉴权 / 安全与防测绘 / 日志与审计）改为**默认折叠**（`<Section defaultOpen={false}>`），点标题再展开。
-- 动机：一页铺开 10 组、每组十几个控件，滚动找半天；先看标题再按需展开更接近"配置目录"的用法。
-- 边界：只改 `Settings.tsx` 的 10 处调用，`Section` 组件默认值仍是展开（其他页面如生成载荷页不受影响）。
-
+**其它**：新增 `GET /api/v1/tasks/{id}?raw=1` 无损回读原始输出；任务失败也保留输出；`go test ./...` 23 包全 ok、两份植入端镜像 62 个 `.go` SHA-256 一致、`e2e_smoke` 19 项 0 失败、`mcp_smoke` 18/18。
 
 ## [v1.4.0] - 2026-09-28（已发布）
 
